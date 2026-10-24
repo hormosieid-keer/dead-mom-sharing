@@ -1,0 +1,49 @@
+name: 问题反馈
+description: 安装、检索、分享或邮件出现异常
+title: '[问题] '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先查看 README 和 docs/TROUBLESHOOTING.md。
+        不要提交 .env、cookie、授权码、聊天内容、真实好友列表或其它隐私。
+  - type: input
+    id: environment
+    attributes:
+      label: 环境与版本
+      description: 系统、浏览器版本，以及插件顶部的实际后台版本
+    validations:
+      required: true
+  - type: dropdown
+    id: action
+    attributes:
+      label: 哪一步出错
+      options:
+        - 安装或邮件配置
+        - 绑定账号或读取好友
+        - 试检索，不发送
+        - 发送待发视频
+        - 开始或恢复监控
+        - 其它
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 操作步骤与预期结果
+      description: 请说明是本轮首条、后续好友还是下一条视频；不要填写真实接收人。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 最新脱敏诊断
+      description: 复制诊断框内容，保留时间、类型、状态、数量、视口和错误；先删除个人信息。
+  - type: dropdown
+    id: delivery
+    attributes:
+      label: 本人是否核对过目标聊天记录
+      options:
+        - 尚未核对或本次不涉及发送
+        - 本人已确认卡片收到
+        - 本人已确认卡片未收到

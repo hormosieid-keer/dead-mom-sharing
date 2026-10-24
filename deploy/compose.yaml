@@ -1,0 +1,24 @@
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # Explicit restarts only: a crash must be inspected before resuming sends.
+    restart: "no"
+    init: false
+    shm_size: "1gb"
+    env_file:
+      - path: ../.env
+        format: raw
+    environment:
+      BOT_DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - bot-data:/app/data
+    # No public SMTP bridge port or browser debugging port.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp_profile.json
+volumes:
+  bot-data:

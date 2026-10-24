@@ -1,0 +1,20 @@
+{
+  "name": "dead-mom-sharing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "抖音司凤视频一键转发功能：按话题与文案关键词查找视频，将原生卡片转发给选定好友",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:extension": "node tests/extension-smoke.mjs",
+    "docs:images": "node scripts/generate-doc-images.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
+    "package": "node scripts/package.mjs",
+    "package:github": "node scripts/package-github.mjs",
+    "release:verify": "node scripts/verify-release.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "playwright": "1.64.1"
+  }
+}

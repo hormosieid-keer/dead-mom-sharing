@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+data
+research
+node_modules
+dist
+test-results
+.git
+**/__pycache__
+**/*.pyc
+*.log
+HANDOFF*.md
+FEASIBILITY.md
+REQUIREMENTS.md
