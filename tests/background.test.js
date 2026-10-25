@@ -1096,7 +1096,7 @@ test('a rejected mail token is distinguished from a network failure', async t =>
   await assert.rejects(worker.command({ type: 'MAIL_HEALTH' }), /连接令牌不匹配/u);
 });
 
-const diagnosticBuild = '0.2.0（自动续发与后台体验更新）';
+const diagnosticBuild = '0.2.1（邮件可选与暂停修复）';
 function oldDiagnostic(state = queued()) {
   state.friendReadReport = { at: 1, error: '发送前检查失败（share-prepare-v5）' };
   return state;
@@ -2030,4 +2030,134 @@ test('failure to maximize an existing worker stops before page actions without f
   assert.equal(store.state.deliveries[0].status,'pending');assert.equal(calls.scripts.length,0);
   assert.equal(calls.windows.filter(c=>c.op==='create').length,0);
   assert.equal(calls.debugger.some(c=>c.op==='Page.bringToFront'),false);
+});
+
+test('manual pause during pointer movement cancels before arm without an incident or alert',async t=>{
+  const {worker,store,calls}=await harness(t,{state:queued()});
+  const dispatch=chrome.debugger.sendCommand;let paused=false;
+  chrome.debugger.sendCommand=async(target,method,params)=>{
+    await dispatch(target,method,params);
+    if(!paused&&method==='Input.dispatchMouseEvent'&&params.type==='mouseMoved'){
+      paused=true;await worker.command({type:'PAUSE'});
+    }
+  };
+  await worker.cycle(false,{queueOnly:true});
+  assert.equal(paused,true);assert.equal(store.state.deliveries[0].status,'pending');
+  assert.equal(store.state.enabled,false);assert.equal(store.state.paused,false);assert.equal(store.state.incident,null);
+  assert.equal(store.state.round.status,'paused');assert.equal(store.state.friendReadReport.error,undefined);
+  assert.equal(store.state.friendReadReport.stopReason,'manual-pause');
+  assert.equal(calls.scripts.some(c=>c.args[0].mode==='arm'),false);
+  assert.equal(calls.debugger.some(c=>c.params?.type==='mousePressed'),false);
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,0);
+});
+
+test('manual pause after arming cancels before press without alert and the pending task can resume once',async t=>{
+  const {worker,store,calls,idle}=await harness(t,{state:queued()});
+  const execute=chrome.scripting.executeScript;let pauseOnce=true;
+  chrome.scripting.executeScript=async options=>{
+    const result=await execute(options);
+    if(options.args[0].mode==='arm'&&pauseOnce){pauseOnce=false;await worker.command({type:'PAUSE'});}
+    return result;
+  };
+  await worker.cycle(false,{queueOnly:true});
+  assert.equal(store.state.deliveries[0].status,'pending');assert.equal(store.state.incident,null);
+  assert.equal(store.state.round.status,'paused');assert.equal(store.state.friendReadReport.error,undefined);
+  assert.equal(calls.debugger.some(c=>c.params?.type==='mousePressed'),false);
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,0);
+  await worker.command({type:'SEND_PENDING'});await idle();
+  assert.equal(store.state.deliveries[0].status,'sent');
+  assert.equal(calls.debugger.filter(c=>c.params?.type==='mousePressed').length,1);
+});
+
+test('a late query failure after explicit pause is cancellation and does not create a new incident',async t=>{
+  const {worker,store,calls}=await harness(t,{state:{...defaultState(),enabled:true}});
+  const execute=chrome.scripting.executeScript,arrived=deferred(),release=deferred();
+  chrome.scripting.executeScript=async options=>{
+    if(options.args[0].action==='search'){arrived.resolve();await release.promise;throw new Error('查询响应在暂停后超时');}
+    return execute(options);
+  };
+  const cycle=worker.cycle();await arrived.promise;await worker.command({type:'PAUSE'});release.resolve();await cycle;
+  assert.equal(store.state.incident,null);assert.equal(store.state.paused,false);assert.equal(store.state.enabled,false);
+  assert.equal(store.state.round.status,'paused');assert.equal(store.state.friendReadReport.error,undefined);
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,0);
+});
+
+test('manual pause before a scripted fallback prevents any possibly submitting call',async t=>{
+  const {worker,store,calls}=await harness(t,{state:queued()});
+  chrome.debugger.attach=async()=>{throw new Error('debugger unavailable');};
+  const execute=chrome.scripting.executeScript;
+  chrome.scripting.executeScript=async options=>{
+    if(options.args[0].action==='share'&&options.args[0].mode==='probe'){
+      await worker.command({type:'PAUSE'});return [{result:{fallback:true}}];
+    }
+    return execute(options);
+  };
+  await worker.cycle(false,{queueOnly:true});
+  assert.equal(store.state.deliveries[0].status,'pending');assert.equal(store.state.incident,null);
+  assert.equal(calls.scripts.some(c=>c.args[0].action==='share'&&!c.args[0].mode),false);
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,0);
+});
+
+test('a possible press followed by pause and missing receipt still preserves unknown and a real alert',async t=>{
+  const {worker,store,calls}=await harness(t,{state:queued()});
+  const execute=chrome.scripting.executeScript;
+  chrome.scripting.executeScript=async options=>{
+    if(options.args[0].mode==='confirm'){
+      await worker.command({type:'PAUSE'});return [{result:{error:'发送结果无法确认，未捕获回执'}}];
+    }
+    return execute(options);
+  };
+  await worker.cycle(false,{queueOnly:true});
+  assert.equal(store.state.deliveries[0].status,'unknown');assert.equal(store.state.paused,true);
+  assert.equal(calls.debugger.filter(c=>c.params?.type==='mousePressed').length,1);
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,1);
+});
+
+test('manual pause does not erase an existing real incident or its pending mail retry',async t=>{
+  const state=queued();failDelivery(state,state.deliveries[0].key,'真实发送结果不明');
+  const incidentId=state.incident.id;
+  const {worker,store,calls}=await harness(t,{state});
+  await worker.command({type:'PAUSE'});await worker.reportIncident();
+  assert.equal(store.state.incident.id,incidentId);assert.equal(store.state.deliveries[0].status,'unknown');
+  assert.equal(store.state.incident.notified,true);assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,1);
+});
+
+for(const mode of ['START','AUTO_LOOP','SEND_PENDING'])test('mail disabled starts '+mode+' without a token or reachable mail service',async t=>{
+  const settings={...config(),mailAlertsEnabled:false,mailBridgeToken:''};
+  const state=mode==='SEND_PENDING'?queued(settings):defaultState();state.enabled=false;
+  const {worker,store,calls,idle}=await harness(t,{config:settings,state},async()=>{throw new Error('mail service absent');});
+  assert.equal((await worker.command({type:mode})).started,true);await idle();
+  assert.equal(calls.fetch.length,0);assert.equal(store.state.incident,null);
+  if(mode==='SEND_PENDING')assert.equal(store.state.deliveries[0].status,'sent');
+  await worker.command({type:'PAUSE'});
+});
+
+test('mail disabled retains real uncertainty on the page but never sends or retries mail even with a saved token',async t=>{
+  const settings={...config(),mailAlertsEnabled:false};
+  const {worker,store,calls,idle}=await harness(t,{config:settings,state:{...queued(settings),enabled:false}},async()=>{throw new Error('must not contact service');},request=>{
+    if(request.mode==='confirm')return {error:'发送回执不明'};
+  });
+  await worker.command({type:'SEND_PENDING'});await idle();await worker.reportIncident();
+  assert.equal(store.state.deliveries[0].status,'unknown');assert.equal(store.state.paused,true);
+  assert.equal(store.state.incident.notified,false);assert.equal(store.state.incident.mailError,undefined);
+  assert.equal(calls.fetch.length,0);
+});
+
+test('disabled mail endpoints cannot send test mail or perform a health request',async t=>{
+  const {worker,calls}=await harness(t,{config:{...config(),mailAlertsEnabled:false}});
+  assert.deepEqual(await worker.command({type:'MAIL_HEALTH'}),{enabled:false,configured:false,skipped:true});
+  await assert.rejects(worker.command({type:'MAIL_TEST'}),/已关闭/);
+  assert.equal(calls.fetch.length,0);
+});
+
+test('enabled mail still requires a valid connection token before starting',async t=>{
+  const {worker,store,calls}=await harness(t,{config:{...config(),mailAlertsEnabled:true,mailBridgeToken:''}});
+  await assert.rejects(worker.command({type:'START'}),/连接令牌/);
+  assert.equal(store.state.enabled,false);assert.equal(calls.fetch.length,0);assert.equal(calls.scripts.length,0);
+});
+
+test('an older saved token preserves enabled notifications without requiring reconfiguration',async t=>{
+  const {worker,store,calls}=await harness(t);
+  assert.equal(store.config.mailAlertsEnabled,true);
+  await worker.command({type:'MAIL_HEALTH'});assert.equal(calls.fetch.length,1);
 });

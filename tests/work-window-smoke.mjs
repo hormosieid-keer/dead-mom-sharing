@@ -9,6 +9,8 @@ import { defaultState, enqueue } from '../extension/core.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const refreshCase = process.env.BOT_TEST_SEND_REFRESH === '1' || process.env.BOT_TEST_FIRST_REFRESH === '1';
+const manualPauseCase=process.env.BOT_TEST_MANUAL_PAUSE==='1';
+const noMailCase=process.env.BOT_TEST_NO_MAIL==='1';
 const results = path.join(root, 'test-results');
 await mkdir(results, { recursive: true });
 const temp = await mkdtemp(path.join(results, 'worker-window-v9-temp-'));
@@ -47,7 +49,8 @@ try {
       }
       return {opened:true};
     }
-    if(input.action==='share'&&input.mode==='probe') return {sent:true,alreadySent:true};
+    if(input.action==='share'&&input.mode==='probe') return ${manualPauseCase}?{prepared:true,x:5,y:6}:{sent:true,alreadySent:true};
+    if(input.action==='share'&&input.mode==='arm')return {armed:true,receiptToken:'fixture-pause-token'};
     throw new Error('Unexpected test action: '+input.action);
   }`);
   for(const name of ['options.html','options.css','options.js']) await copyFile(path.join(root,'extension',name),path.join(extension,name));
@@ -59,8 +62,26 @@ try {
   });
   await context.route('https://www.douyin.com/**', r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Local video fixture</title>' }));
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
-  await worker.evaluate(()=>{
+  await worker.evaluate(manualPauseCase=>{
     globalThis.fixtureSurfaceEvents=[];
+    globalThis.fixtureAwaitingPause=false;
+    globalThis.fixturePresses=0;
+    if(manualPauseCase){
+      const execute=chrome.scripting.executeScript.bind(chrome.scripting);
+      chrome.scripting.executeScript=async options=>{
+        const result=await execute(options);
+        if(options.args?.[0]?.mode==='arm'){
+          fixtureAwaitingPause=true;
+          await new Promise(resolve=>{globalThis.fixtureReleaseArm=resolve;});
+        }
+        return result;
+      };
+      const dispatch=chrome.debugger.sendCommand.bind(chrome.debugger);
+      chrome.debugger.sendCommand=async(target,method,params)=>{
+        if(method==='Input.dispatchMouseEvent'&&params?.type==='mousePressed')fixturePresses++;
+        return dispatch(target,method,params);
+      };
+    }
     const update=chrome.tabs.update.bind(chrome.tabs);
     chrome.tabs.update=async(tabId,options)=>{
       if(options.url){
@@ -75,7 +96,7 @@ try {
       fixtureSurfaceEvents.push({kind:'create',options,muted});
       return create(options);
     };
-  });
+  },manualPauseCase);
   const id = new URL(worker.url()).hostname;
   const options = await context.newPage();
   await options.goto(`chrome-extension://${id}/options.html`);
@@ -93,7 +114,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   assert.equal(loaded, true, 'legacy fixture tab must finish loading before it is reused');
-  const config = { schemaVersion: 1, maxPages: 1, mailBridgeToken: 'x'.repeat(40), account: { id: '123', name: 'fixture' },
+  const config = { schemaVersion: 1, maxPages: 1, mailAlertsEnabled:!noMailCase,mailBridgeToken:noMailCase?'':'x'.repeat(40), account: { id: '123', name: 'fixture' },
     rules: [{ id: 'r', tags: ['测试话题'], keywords: [], recipients: [{ id: 'uid:7000000000000000001', uid: '7000000000000000001', name: 'fixture friend' }] }] };
   const state = { ...defaultState(), workerTabId: old.tabId, workerWindowId: old.windowId };
   state.friendReadReport = { at: 1, error: 'old share-prepare-v5 fixture' };
@@ -102,6 +123,17 @@ try {
   await worker.evaluate(data => chrome.storage.local.set(data), { state, config });
   const started = await options.evaluate(() => chrome.runtime.sendMessage({ type: 'SEND_PENDING' }));
   assert.equal(started.ok, true, JSON.stringify(started));
+  if(manualPauseCase){
+    let armed=false;
+    for(let index=0;index<200;index++){
+      if(await worker.evaluate(()=>fixtureAwaitingPause)){armed=true;break;}
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    assert.equal(armed,true,'must reach the held arm callback before pressing');
+    const paused=await options.evaluate(()=>chrome.runtime.sendMessage({type:'PAUSE'}));
+    assert.equal(paused.ok,true);
+    await worker.evaluate(()=>fixtureReleaseArm());
+  }
   // This Playwright build treats a Promise as a truthy waitForFunction result;
   // poll awaited status messages in Node rather than an async page predicate.
   let finished = false;
@@ -115,9 +147,19 @@ try {
     const { data: { state } } = await chrome.runtime.sendMessage({ type: 'STATUS' });
     return { state, window: await chrome.windows.get(state.workerWindowId, { populate: true }) };
   });
+  if(manualPauseCase){
+    assert.equal(after.state.deliveries[0].status,'pending');
+    assert.equal(after.state.enabled,false);assert.equal(after.state.paused,false);
+    assert.equal(after.state.incident,null);assert.equal(after.state.round.status,'paused');
+    assert.equal(after.state.friendReadReport.error,undefined);assert.equal(after.state.friendReadReport.stopReason,'manual-pause');
+    assert.equal(await worker.evaluate(()=>fixturePresses),0);
+    assert.deepEqual(requests,noMailCase?[]:['/check'],'manual cancellation must not call the alert endpoint');
+    const report='PASS: actual isolated extension pauses while the arm response is held, cancels before real pointer press, retains pending delivery and paused round, creates no incident or alert. Synthetic account/page only; no real send or mail.';
+    await writeFile(path.join(results,'manual-pause-smoke.txt'),report+'\n');console.log(report);
+  }else{
   assert.equal(after.state.deliveries[0].status, 'sent', JSON.stringify({ incident: after.state.incident, logs: after.state.logs }));
   assert.equal(after.state.friendReadReport.phase, 'done');
-  assert.equal(after.state.friendReadReport.build, '0.2.0（自动续发与后台体验更新）');
+  assert.equal(after.state.friendReadReport.build, '0.2.1（邮件可选与暂停修复）');
   assert.equal(after.state.friendReadReport.sent, 0, 'already-sent fixture performs no new send');
   assert.equal(after.state.round.source,'queue');
   assert.equal(after.state.round.status,'done');
@@ -141,7 +183,7 @@ try {
     return tab.url === location.href;
   }, old.windowId);
   assert.equal(settingsStayed, true);
-  assert.deepEqual(requests, ['/check']);
+  assert.deepEqual(requests, noMailCase?[]:['/check']);
   if(refreshCase) {
     assert.equal(after.state.logs.filter(entry=>entry.message.includes('自动刷新当前视频')).length,2);
     const navigation = await worker.evaluate(async tabId => {
@@ -201,12 +243,13 @@ try {
     assert.equal(events.filter(event=>event.kind==='create'&&event.options.tabId!=null).every(event=>event.muted),true);
     assert.equal(events.filter(event=>event.kind==='create'&&event.options.tabId==null).every(event=>event.options.url==='about:blank'&&event.options.focused===false),true);
     assert.equal(events.filter(event=>event.kind==='navigate').every(event=>event.muted),true);
-    assert.deepEqual(requests,['/check','/check','/check']);
+    assert.deepEqual(requests,noMailCase?[]:['/check','/check','/check']);
   }
-  const report = 'PASS: real extension keeps settings selected; isolated worker is maximized, unfocused and muted. No real search, send or mail, fake health endpoint only.' +
+  const report = 'PASS: real extension keeps settings selected; isolated worker is maximized, unfocused and muted. No real search, send or mail.' +(noMailCase?' Optional mail disabled: no token and zero mail-service requests.':' Fake health endpoint only.')+
     (refreshCase ? ' Missing share entry triggers exactly two real tab reloads; the third document prepares successfully.' : ' Restored/unmuted worker is repaired without reloading the same video; a closed worker is recreated blank and muted before navigation.');
-  await writeFile(path.join(results, refreshCase?'send-refresh-v17-smoke.txt':'worker-surface-v23-smoke.txt'), report + '\n');
+  await writeFile(path.join(results, noMailCase?'optional-mail-smoke.txt':refreshCase?'send-refresh-v17-smoke.txt':'worker-surface-v23-smoke.txt'), report + '\n');
   console.log(report);
+  }
 } finally {
   await context?.close();
   await new Promise(resolve => bridge.close(resolve));

@@ -23,8 +23,15 @@ export function makeKey(accountId, videoId, recipientId) {
   return JSON.stringify([str(accountId), str(videoId), str(recipientId)]);
 }
 
+// Retain notification behavior for old configurations with a saved token;
+// fresh configurations default off, and explicit false always wins.
+export function mailAlertsEnabled(config) {
+  return typeof config?.mailAlertsEnabled==='boolean'?config.mailAlertsEnabled:!!str(config?.mailBridgeToken);
+}
+
 export function validateConfig(config, { ready = false } = {}) {
   if (!config || typeof config !== 'object') throw new Error('配置不能为空');
+  if(config.mailAlertsEnabled!=null&&typeof config.mailAlertsEnabled!=='boolean')throw new Error('邮件告警开关必须为布尔值');
   const account = str(config.account?.id) ? { ...config.account, id: str(config.account.id), name: str(config.account.name) } : null;
   if (ready && !account?.id) throw new Error('请先绑定 bot 账号');
   if (config.rules != null && !Array.isArray(config.rules)) throw new Error('规则必须为列表');
@@ -67,7 +74,7 @@ export function validateConfig(config, { ready = false } = {}) {
   // One month is the ceiling: 30 days of minutes.
   const videoWindowMinutes = setting(config.videoWindowMinutes, DEFAULTS.videoWindowMinutes, 5, 43200, '新视频窗口（分钟）');
   const maxVideosPerWindow = setting(config.maxVideosPerWindow, DEFAULTS.maxVideosPerWindow, 1, 30, '每分钟视频上限');
-  return { ...config, schemaVersion: 1, maxPages, checkIntervalSeconds, videoWindowMinutes, maxVideosPerWindow, account, rules };
+  return { ...config, schemaVersion: 1, mailAlertsEnabled:mailAlertsEnabled(config), maxPages, checkIntervalSeconds, videoWindowMinutes, maxVideosPerWindow, account, rules };
 }
 
 export function normalizeVideo(raw) {

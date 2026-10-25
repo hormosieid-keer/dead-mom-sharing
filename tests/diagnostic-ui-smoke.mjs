@@ -10,7 +10,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const results = path.join(root, 'test-results');
 await mkdir(results, { recursive: true });
 const [html, css, js] = await Promise.all(['options.html', 'options.css', 'options.js'].map(name => readFile(path.join(root, 'extension', name), 'utf8')));
-const build = '0.2.0（自动续发与后台体验更新）';
+const build = '0.2.1（邮件可选与暂停修复）';
 const browser = await chromium.launch({ executablePath: process.env.BOT_TEST_CHROMIUM || undefined, headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1366, height: 1000 } });

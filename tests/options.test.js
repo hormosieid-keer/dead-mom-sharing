@@ -17,22 +17,23 @@ async function until(predicate) {
   }
   throw new Error('Options UI did not settle');
 }
-const build = '0.2.0（自动续发与后台体验更新）';
-async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {} } = {}) {
+const build = '0.2.1（邮件可选与暂停修复）';
+async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {},configOverrides = {} } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension-fixture.test/options.html', runScripts: 'outside-only' });
   const { window } = dom;
   window.structuredClone = structuredClone;
   const state = { ...defaultState(), friendReadReport: saved, ...initialState };
-  const config = { account: { id: '123', name: '测试账号' }, rules: [], mailBridgeToken: 'secret-must-not-be-copied' };
+  const config = { account: { id: '123', name: '测试账号' }, rules: [], mailBridgeToken: 'secret-must-not-be-copied',...configOverrides };
   const calls = [], copies = [];
   Object.defineProperty(window.navigator, 'clipboard', { value: { async writeText(text) {
     if (clipboardError) throw new Error('clipboard unavailable');
     copies.push(text);
   } } });
   let storageChanged;
-  window.chrome = { storage: { onChanged: { addListener: fn => {storageChanged=fn;} } }, runtime: { async sendMessage({ type }) {
+  window.chrome = { storage: { onChanged: { addListener: fn => {storageChanged=fn;} } }, runtime: { async sendMessage({ type,...fields }) {
     calls.push(type);
     if (type === 'STATUS') return { ok: true, data: structuredClone({ state, config, busy: false, workerBuild }) };
+    if(type==='SAVE'){Object.assign(config,structuredClone(fields.config));return {ok:true,data:{saved:true}};}
     if(type==='AUTO_LOOP'&&autoLoop){state.enabled=true;state.runMode='auto-loop';return {ok:true,data:{started:true,autoLoop:true}};}
     if(type==='PAUSE'){state.enabled=false;state.resumePlan=null;return {ok:true,data:{}};}
     if (type === 'SEND_PENDING' && manualSend) {
@@ -166,7 +167,7 @@ test('UI shows persisted progress, terminal success and actual background build'
     await f.window.refresh();
     assert.equal(f.$('friend-diagnostic').dataset.state, 'ready');
     assert.match(f.$('friend-diagnostic-output').value, /状态：已结束/);
-    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.0（自动续发与后台体验更新）/);
+    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.1（邮件可选与暂停修复）/);
   } finally { f.close(); }
 });
 
@@ -323,5 +324,32 @@ test('rate waits are visibly running with an automatic resume time and can be pa
     f.$('pause').click();
     await until(()=>f.$('status').textContent==='已暂停'&&!f.$('pause').disabled);
     assert.equal(f.state.resumePlan,null);
+  }finally{f.close();}
+});
+
+test('optional mail switch keeps unsaved intent through polling and persists both enable and disable choices',async()=>{
+  const f=await fixture({configOverrides:{mailAlertsEnabled:false}});
+  try{
+    assert.equal(f.$('mail-alerts-enabled').checked,false);assert.equal(f.$('mail-token').disabled,true);
+    assert.equal(f.$('mail-test').disabled,true);assert.match(f.$('mail-status').textContent,/无需配置/);
+    f.$('mail-alerts-enabled').click();await f.window.refresh();
+    assert.equal(f.$('mail-alerts-enabled').checked,true);assert.equal(f.$('mail-token').disabled,false);
+    assert.match(f.$('mail-status').textContent,/保存/);
+    f.$('save').click();await until(()=>!f.$('save').disabled);
+    assert.equal(f.calls.includes('SAVE'),true);assert.equal(f.$('mail-alerts-enabled').checked,true);
+    assert.match(f.$('mail-status').textContent,/尚未检查/);
+    f.$('mail-alerts-enabled').click();f.$('save').click();await until(()=>!f.$('save').disabled);
+    await f.window.refresh(true);
+    assert.equal(f.$('mail-alerts-enabled').checked,false);assert.equal(f.$('mail-health').disabled,true);
+    assert.equal(f.calls.some(type=>['MAIL_TEST','MAIL_HEALTH'].includes(type)),false);
+  }finally{f.close();}
+});
+
+test('disabled mail hides stale mail-retry guidance while keeping the real on-page incident visible',async()=>{
+  const f=await fixture({configOverrides:{mailAlertsEnabled:false},initialState:{paused:true,incident:{reason:'需要核对发送',mailError:'邮件未能送达，服务恢复后重试'}}});
+  try{
+    assert.equal(f.$('incident').hidden,false);assert.match(f.$('incident-reason').textContent,/需要核对/);
+    assert.match(f.$('mail-error').textContent,/已关闭/);assert.doesNotMatch(f.$('mail-error').textContent,/恢复后重试/);
+    assert.equal(f.$('mail-alerts-enabled').checked,false);
   }finally{f.close();}
 });

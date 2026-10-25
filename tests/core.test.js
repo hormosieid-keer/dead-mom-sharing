@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultState, validateConfig, normalizeVideo, collectVideos, matchRules, enqueue,
   nextDelivery, nextDeliveryAt, reserveDelivery, completeDelivery, failDelivery, abortDelivery, recoverState,
-  resolveDelivery, makeKey, beginRound, updateRoundResults, finishRound, skipUnavailableVideo
+  resolveDelivery, makeKey, beginRound, updateRoundResults, finishRound, skipUnavailableVideo, mailAlertsEnabled
 } from '../extension/core.js';
 
 const NOW = 1_800_000_000_000;
@@ -15,6 +15,15 @@ const raw = (id = '1', overrides = {}) => ({ aweme_id: id, create_time: NOW / 10
   text_extra: [{ type: 1, hashtag_id: 'tag-1', hashtag_name: '爱慕杰' }], ...overrides });
 const video = (id = '1', overrides = {}) => normalizeVideo(raw(id, overrides));
 const running = () => ({ ...defaultState(), enabled: true });
+
+test('mail preference defaults off, preserves legacy tokens and honors an explicit opt-out',()=>{
+  assert.equal(mailAlertsEnabled({}),false);
+  assert.equal(mailAlertsEnabled({mailBridgeToken:'  '}),false);
+  assert.equal(validateConfig({...config(),mailBridgeToken:'saved-token'}).mailAlertsEnabled,true);
+  assert.equal(validateConfig({...config(),mailBridgeToken:'saved-token',mailAlertsEnabled:false}).mailAlertsEnabled,false);
+  assert.equal(validateConfig({...config(),mailAlertsEnabled:true}).mailAlertsEnabled,true);
+  assert.throws(()=>validateConfig({...config(),mailAlertsEnabled:'false'}),/布尔/);
+});
 
 test('unavailable videos skip only matching pending recipients, retaining confirmations, uncertainty and limits',()=>{
   const state=running(),settings=config([rule({recipients:['a','b','c','d','e'].map(friend)})]);

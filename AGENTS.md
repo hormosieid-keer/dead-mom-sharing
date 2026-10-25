@@ -21,6 +21,11 @@ docs/DEVELOPMENT.md for architecture and commands, and TESTING.md for evidence l
 - Persist sending reservation before submitting input. Arm a task-bound receipt
   observer before the actual press; validate the live control for the same UID.
 - Post-press failures remain unknown. Never retry a possible send automatically.
+- Explicit manual pause before a possible submit is cancellation, never a new
+  mail incident. Preserve real incidents and all post-press uncertainty.
+- Email alerts are optional. Disabled means no mail health requests or mail
+  sends/retries; on-page pauses and unknown records remain in force. Retain old
+  configured users' preference and honor an explicit opt-out with saved tokens.
 - Reload recovery is bounded to two refreshes (three page attempts) per pending
   delivery before any sending input; challenge, account mismatch and ambiguity
   must not enter that retry branch. A possible send is never retried.

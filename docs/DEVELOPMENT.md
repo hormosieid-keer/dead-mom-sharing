@@ -83,7 +83,7 @@ npm run docs:images
 npm run docs:check
 ```
 
-脚本从真实 options HTML／CSS／JS 渲染九张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
+脚本从真实 options HTML／CSS／JS 渲染十张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
 
 生成后检查截图文字是否可读、未截掉关键按钮；新增或改名的图片要同时更新 README 引用。
 
@@ -199,3 +199,11 @@ options.html 用 data-help 标记区域，options.js 的 REGION_HELP 提供本�
 新窗口先打开 about:blank；muteWorkTab 设置 muted:true 并确认 mutedInfo.muted 后才导航抖音。旧工作标签迁移前先静音，复用同视频时重新确认静音；尺寸改变后等待布局稳定。同视频不因最大化或静音而刷新。失败沿用暂停告警流程，不退回小窗口继续发送，也不修改其他标签页。
 
 work-window-smoke 使用 viewport:null 验证原生窗口，避免 Playwright 对新页模拟视口时主动还原窗口。匿名联调覆盖旧标签隔离、恢复缩小／取消静音状态、关闭后新建空白窗口和导航前已静音；设置页保持选中，无真实账号、发送或邮件。
+
+## 手动暂停与可选邮件
+
+lastPauseEpoch只由显式PAUSE更新。当前轮次被手动停止且attemptedClick仍为false时，晚到的查询、悬停或arm异常作为正常取消：撤销发送预留，保留pending，不创建事故或邮件；回执不明和已有真实事故不清除。脚本回退发送前也重新检查暂停。
+
+mailAlertsEnabled为布尔配置：新安装false，旧配置缺字段时按是否已有连接令牌兼容迁移。false跳过所有启动健康检查、告警发送/重试和测试邮件，但不解除页面暂停或unknown。启用时仍校验令牌与服务；导入导出保留开关，导出继续剥离令牌。
+
+独立联调可设置BOT_TEST_MANUAL_PAUSE=1与BOT_TEST_NO_MAIL=1运行work-window-smoke.mjs，分别覆盖arm回调期间真实PAUSE和无邮件请求的队列续发，均使用虚构页面和随机测试端口。

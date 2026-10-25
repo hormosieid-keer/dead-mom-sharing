@@ -1,5 +1,6 @@
 const $ = id=>document.getElementById(id);
-const UI_BUILD='0.2.0（自动续发与后台体验更新）';
+const UI_BUILD='0.2.1（邮件可选与暂停修复）';
+const mailEnabled=cfg=>typeof cfg?.mailAlertsEnabled==='boolean'?cfg.mailAlertsEnabled:!!cfg?.mailBridgeToken?.trim();
 let config, snapshot, friends=[],dirty=false,noticeTimer;
 let statusRequest=0,statusApplied=0,statusRevision=-1,statusRefreshTimer;
 let friendDiagnosticBusy=false,friendReportAt=0,friendReportSeq=0,friendLocalReport=false;
@@ -50,13 +51,14 @@ const REGION_HELP={
     ['试检索，不发送','按规则查询并展示本轮结果，不发送。查询分段时再次点击可继续；启动发送前可先用它核对规则。'],
     ['等待发送／本轮已发送卡片','等待发送是剩余好友任务数；本轮已发送只统计当前轮次新确认成功的卡片，同视频给 3 人算 3 张。自动续段与限速等待不清零。'],
     ['最近检查与等待状态','最近检查只在完整查询完成后更新。等待限速仍在运行，无需重复启动；验证码、账号变化、回执不明会暂停并告警。']]},
-  mail:{title:'邮件告警',intro:'本地配套邮件服务在需要人工处理时发送告警。启动发送前需要连接服务，邮箱和 SMTP 参数由本机邮件服务配置。',items:[
+  mail:{title:'邮件告警（可选）',intro:'邮件提醒是可选功能。关闭时无需配置邮箱或启动邮件服务，仍可抓取和转发；真正异常仍会暂停并在页面提示。',items:[
+    ['启用邮件告警','新安装默认关闭；旧版已有连接令牌会保留启用状态。打开后需要配置并连接本地邮件服务，改完点击“保存规则与设置”生效。手动暂停不会触发告警。'],
     ['邮件服务连接令牌','填写与本地邮件服务一致的连接令牌，编辑后保存。这里不是邮箱密码或邮箱授权码。'],
     ['检查邮件服务','检查连接、令牌和服务是否已配置；不会发送邮件，也不能证明邮件实际投递成功。'],
     ['发送测试邮件','实际发送一封测试邮件，请到收件箱核对。显示已交给服务器仍不等于已经收件。']]},
   transfer:{title:'切换运行位置',intro:'用于迁移配置与发送记录。先暂停旧实例，避免两个实例同时发送。备份可能包含账号、好友和视频记录，请妥善保管。',items:[
     ['导出备份','下载当前已保存配置和发送记录的 JSON 备份。未保存的编辑请先保存；备份不包含抖音登录会话和邮件连接令牌。'],
-    ['导入备份','选择备份 JSON 文件，替换当前配置与记录。先导出当前备份以便保留；导入后保持停止，核对账号、重新登录并配置邮件服务后再启动。']]},
+    ['导入备份','选择备份 JSON 文件，替换当前配置与记录。先导出当前备份以便保留；导入后保持停止，核对账号并重新登录，只有启用邮件告警时才需要配置服务。']]},
   review:{title:'待核对的发送',intro:'这里的记录可能已经发送成功。请亲自查看目标好友聊天记录，再处理；插件不会自动重试未知结果。',items:[
     ['核对后标记已发送','仅在确认好友已收到这条视频时使用，保留防重记录，并按原轮次计数。'],
     ['确认未发送，重试','仅在确认未发送且仍希望发送时使用，将该任务放回待发队列。之后仍需手动启动或恢复。'],
@@ -201,7 +203,7 @@ function showFriendReport(report,{local=false}={}) {
   $('friend-diagnostic').dataset.state=report.phase==='running'?'loading':report.error||partial?'error':'ready';
   for(const [id,value] of [['friend-first-observed',first?.controls],['friend-first-recognized',first?.recognized],['friend-first-rejected',first?.rejected]]) $(id).textContent=value??'—';
   const kinds={friends:'好友读取',diagnose:'分享面板诊断',run:'查询／发送',scan:'试检索'};
-  const lines=['好友读取诊断 · v0.2.0',`时间：${time(report.at)}`,
+  const lines=['好友读取诊断 · v0.2.1',`时间：${time(report.at)}`,
     '报告版本：'+(report.build||'历史记录（未记录版本）'),'当前后台：'+(snapshot?.workerBuild||'未确认，请重新加载扩展'),
     '类型：'+(kinds[report.kind]||'历史报告')+'；状态：'+(report.phase==='running'?'进行中':report.error?'失败':'已结束')];
   if(report.error) {
@@ -244,6 +246,19 @@ async function friendDiagnosticAction(fn) {
   }
   finally {friendDiagnosticBusy=false;}
 }
+function updateMailControls(data){
+  if(!data)return;
+  const selected=$('mail-alerts-enabled').checked,saved=mailEnabled(data.config);
+  const running=data.busy||(data.state.enabled&&!data.state.paused);
+  $('mail-alerts-enabled').disabled=!!running;
+  for(const id of ['mail-token','mail-health','mail-test'])$(id).disabled=!selected||!!running;
+  const status=$('mail-status');
+  if(!selected)status.textContent='邮件告警已关闭，无需配置邮箱或启动邮件服务。'+(saved?'保存后生效。':'');
+  else if(!saved)status.textContent='邮件告警将启用，请配置邮件服务并保存设置。';
+  else if(status.dataset.mailEnabled!=='true'||status.dataset.mailSaved!=='true')status.textContent='邮件服务：尚未检查';
+  status.dataset.mailEnabled=String(selected);
+  status.dataset.mailSaved=String(saved);
+}
 function drawStatus(data) {
   snapshot=data;const state=data.state;
   $('runtime-version').textContent=data.workerBuild===UI_BUILD?'后台 '+data.workerBuild:'后台 '+(data.workerBuild||'版本未知')+'，请重新加载扩展';
@@ -271,7 +286,8 @@ function drawStatus(data) {
   $('account-detail').textContent=data.config.account?`账号标识 ${data.config.account.id}`:'先登录，再识别并绑定当前账号';
   $('incident').hidden=!state.paused;
   $('incident-reason').textContent=state.incident?.reason||'请核对待确认的发送记录。';
-  $('mail-error').textContent=state.incident?.mailError||(state.incident?.notified?'告警邮件已交给邮件服务发送。':'');
+  $('mail-error').textContent=mailEnabled(data.config)?state.incident?.mailError||(state.incident?.notified?'告警邮件已交给邮件服务发送。':''):'邮件告警已关闭；后续不发送邮件。';
+  updateMailControls(data);
   rows('uncertain',state.deliveries.filter(d=>d.status==='unknown'),d=>{
     const row=el('div',undefined,'list-row error');row.append(el('p',`视频 ${d.video.id} → ${d.recipient.name}`),el('small',d.error||'发送结果未确认'));
     const actions=el('div',undefined,'actions');
@@ -309,7 +325,7 @@ async function refresh(loadConfig=false) {
   if(request<statusApplied||revision<statusRevision) return snapshot||data;
   statusApplied=request;statusRevision=revision;
   if(loadConfig || !config) {
-    config=structuredClone(data.config);$('max-pages').value=String(config.maxPages||3);$('mail-token').value=config.mailBridgeToken||'';loadRhythm(config);dirty=false;drawRules();
+    config=structuredClone(data.config);$('max-pages').value=String(config.maxPages||3);$('mail-token').value=config.mailBridgeToken||'';$('mail-alerts-enabled').checked=mailEnabled(config);loadRhythm(config);dirty=false;drawRules();
     if(!friends.length){const saved=new Set(config.rules.flatMap(r=>r.recipients.map(f=>f.id)));if(saved.size)$('friends-summary').textContent='规则中已保存 '+saved.size+' 位接收好友。可重新读取分享面板补充好友。';}
   }
   drawStatus(data);return data;
@@ -318,6 +334,7 @@ async function run(button,fn) {button.disabled=true;try{await fn();}catch(error)
 function click(id,fn){$(id).addEventListener('click',()=>run($(id),fn));}
 async function save() {
   config.maxPages=Number($('max-pages').value);config.mailBridgeToken=$('mail-token').value.trim();
+  config.mailAlertsEnabled=$('mail-alerts-enabled').checked;
   config.checkIntervalSeconds=Number($('check-interval').value);config.videoWindowMinutes=Number($('video-window').value);config.maxVideosPerWindow=Number($('rate-max').value);
   await api('SAVE',{config});dirty=false;await refresh(true);notice('设置已保存。');
 }
@@ -368,13 +385,13 @@ click('import',async()=>{
 $('import-file').addEventListener('change',async(event)=>{
   try{
     const file=event.target.files[0];if(!file)return;
-    const backup=JSON.parse(await file.text());await api('IMPORT',{backup});await refresh(true);notice('备份已导入；请核对账号、配置邮件服务后再启动。');
+    const backup=JSON.parse(await file.text());await api('IMPORT',{backup});await refresh(true);notice('备份已导入；请核对账号和邮件告警开关后再启动。');
   }catch(error){notice(error.message,true);}finally{event.target.value='';}
 });
-for(const id of ['max-pages','mail-token','check-interval','video-window','rate-max']){
+for(const id of ['max-pages','mail-token','mail-alerts-enabled','check-interval','video-window','rate-max']){
   const node=$(id);
   node.addEventListener('input',()=>{dirty=true;});
-  node.addEventListener('change',()=>{dirty=true;});
+  node.addEventListener('change',()=>{dirty=true;if(id==='mail-alerts-enabled')updateMailControls(snapshot);});
 }
 window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});
 refresh(true).catch(error=>notice(error.message,true));

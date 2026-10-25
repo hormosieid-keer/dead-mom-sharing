@@ -20,6 +20,7 @@ const report = { at, seq: 1, build: manifest.version_name, kind: 'friends', phas
   unrecognized: 0, stop: 'bottom', rejectionCounts: {}, samples: []
 } };
 const config = { schemaVersion: 1, account: { id: '12345678', name: '演示账号 · 非真实账号' }, maxPages: 3,
+  mailAlertsEnabled:true,
   checkIntervalSeconds: 60, videoWindowMinutes: 60, maxVideosPerWindow: 5,
   mailBridgeToken: 'documentation-fixture-not-a-real-bridge-token',
   rules: [{ id: 'demo-rule', name: '示例：司凤视频转发', tags: ['司凤'], keywords: ['司凤视频'], recipients: recipients.slice(0, 2) }]
@@ -127,6 +128,7 @@ try {
     const rect=await tooltip.boundingBox();
     await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2);
     await page.mouse.wheel(0,800);
+    await page.waitForFunction(()=>document.querySelector('#region-help-tooltip').scrollTop>0,null,{timeout:3000});
     assert.equal(await tooltip.isVisible(),true,'moving into the explanation must allow reading and scrolling');
     assert.ok(await tooltip.evaluate(node=>node.scrollTop>0),'long explanations can scroll');
     await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
@@ -143,5 +145,14 @@ try {
     await page.mouse.move(1,1);await tooltip.waitFor({state:'hidden'});
   }
   assert.deepEqual(await page.evaluate(from=>docsCalls.slice(from).filter(type=>type!=='STATUS'),callsBefore),[],'help must never trigger a worker action');
-  console.log('Rendered 9 screenshots. All 12 help buttons: hover/leave, keyboard/Escape, long-panel scrolling, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
+  await page.setViewportSize({width:1440,height:1100});
+  await page.locator('#mail-alerts-enabled').uncheck();
+  await page.evaluate(()=>{docsFixture.config.mailAlertsEnabled=false;});
+  await page.waitForFunction(()=>document.querySelector('#mail-status').textContent.includes('已关闭'));
+  assert.equal(await page.locator('#mail-token').isEnabled(),false);
+  assert.equal(await page.locator('#mail-health').isEnabled(),false);
+  assert.equal(await page.locator('#mail-test').isEnabled(),false);
+  await page.locator('[data-help="mail"]').screenshot({path:path.join(out,'optional-mail.png')});
+  assert.deepEqual(await page.evaluate(from=>docsCalls.slice(from).filter(type=>type!=='STATUS'),callsBefore),[]);
+  console.log('Rendered 10 screenshots. Help hover/keyboard/scroll, optional-mail disabled controls, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
 } finally { await browser.close(); }

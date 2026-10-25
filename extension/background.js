@@ -1,13 +1,13 @@
 import { defaultState, validateConfig, collectVideos, matchRules, enqueue, nextDelivery, nextDeliveryAt,
   reserveDelivery, completeDelivery, failDelivery, abortDelivery, recoverState, resolveDelivery, makeKey,
-  beginRound, updateRoundResults, finishRound, skipUnavailableVideo, UNAVAILABLE_REASONS } from './core.js';
+  beginRound, updateRoundResults, finishRound, skipUnavailableVideo, UNAVAILABLE_REASONS, mailAlertsEnabled } from './core.js';
 import { browserTask } from './adapter.js';
 import { Pointer } from './pointer.js';
 
 const ALARM = 'douyin-minute';
 const CONTINUE_ALARM = 'douyin-continue';
 const MAIL = 'http://127.0.0.1:17321';
-const BUILD = '0.2.0（自动续发与后台体验更新）';
+const BUILD = '0.2.1（邮件可选与暂停修复）';
 const MAX_SEND_REFRESHES = 2;
 const SEND_STOP_TEXT = {
   'queue-empty':'待发队列已处理完毕',
@@ -17,11 +17,14 @@ const SEND_STOP_TEXT = {
   'manual-pause':'收到手动暂停指令',
   'segment-end':'本段任务已结束'
 };
-const initialConfig = () => ({schemaVersion:1,account:null,maxPages:3,mailBridgeToken:'',rules:[
+const initialConfig = () => ({schemaVersion:1,account:null,maxPages:3,mailAlertsEnabled:false,mailBridgeToken:'',rules:[
   {id:crypto.randomUUID(),name:'司凤视频转发',tags:['司凤'],keywords:['司凤视频'],recipients:[]}
 ]});
 let busy = false;
 let commandEpoch = 0;
+// Only an explicit PAUSE cancels late pre-submit failures. Configuration or
+// account changes must not accidentally silence a genuine fault.
+let lastPauseEpoch = 0;
 let serial = Promise.resolve();
 const change = (fn) => {
   const job = serial.then(async () => {
@@ -65,6 +68,7 @@ function activeResumePlan(state) {
     plan.mode===(state.runMode||'monitor')&&typeof plan.roundId==='string';
 }
 const ready = change(data => {
+  data.config.mailAlertsEnabled=mailAlertsEnabled(data.config);
   const saved=data.state;
   const waiting=activeResumePlan(saved)&&saved.round?.status==='running'&&saved.round.id===saved.resumePlan.roundId&&
     !saved.deliveries.some(d=>['sending','unknown'].includes(d.status));
@@ -328,6 +332,7 @@ async function assertAccount(tabId, config) {
 }
 async function mailHealth() {
   const {config}=await chrome.storage.local.get('config');
+  if(!mailAlertsEnabled(config))return {enabled:false,configured:false,skipped:true};
   let response;
   try {
     response = await fetch(`${MAIL}/check`,{headers:{Authorization:`Bearer ${config?.mailBridgeToken||''}`},signal:AbortSignal.timeout(5000)});
@@ -337,13 +342,13 @@ async function mailHealth() {
   if (response.status===401) throw new Error('邮件服务连接令牌不匹配，请检查插件中填写的连接令牌。');
   if (!response.ok) throw new Error(`邮件服务检查失败（HTTP ${response.status}），请检查本地邮件服务。`);
   const result = await response.json();
-  if (!result.configured) throw new Error('请先配置并启动邮件服务，才能启用自动转发。');
+  if (!result.configured) throw new Error('已启用邮件告警，请先配置并启动邮件服务，或关闭邮件告警后运行。');
   return result;
 }
 async function reportIncident() {
   const {state,config} = await chrome.storage.local.get(['state','config']);
   const incident = state?.incident;
-  if (!incident || incident.notified || !config?.mailBridgeToken) return;
+  if (!mailAlertsEnabled(config) || !incident || incident.notified || !config?.mailBridgeToken) return;
   const incidentId = incident.id || incident.incidentId;
   if (!incidentId) return;
   try {
@@ -608,6 +613,7 @@ async function cycle(dryRun = false, { queueOnly = false } = {}) {
             }
           }
           if (!result) {
+            if(await stopIfPaused()) return;
             attemptedClick=true;
             result = await execute(tabId,'share',{recipient:delivery.recipient,videoId:delivery.video.id});
           }
@@ -671,6 +677,18 @@ async function cycle(dryRun = false, { queueOnly = false } = {}) {
       await delay(1200);
     }
   } catch(error) {
+    // A paused job can still receive a failed hover/arm/search callback. Before
+    // any possible submitting input, that is cancellation rather than an
+    // incident. After a press we must still preserve uncertainty and alert.
+    if(!attemptedClick&&lastPauseEpoch>epoch) {
+      await change(({state})=>{
+        if(sendingKey&&state.deliveries.some(d=>d.key===sendingKey&&d.status==='sending'))
+          abortDelivery(state,sendingKey,'已手动暂停，发送尚未执行',Date.now());
+        log(state,'info','已手动暂停，本次操作已取消；尚未点击发送，不发送告警。');
+      });
+      sendingKey=null;
+      return dryRun?{cancelled:true,count:scanCount||0}:undefined;
+    }
     runFailed=true;
     failureMessage=String(error?.message||error);
     const transient=/Detached|target_closed|not attached|No tab with given id/iu.test(String(error?.message||error));
@@ -781,7 +799,7 @@ async function handleCommand(message) {
     return {...data,busy,workerBuild:BUILD};
   }
   if(type==='OPEN_LOGIN') return chrome.tabs.create({url:'https://www.douyin.com/user/self'});
-  if(type==='PAUSE') {commandEpoch++;const result=await change(({state})=>{
+  if(type==='PAUSE') {lastPauseEpoch=++commandEpoch;const result=await change(({state})=>{
     state.enabled=false;state.resumePlan=null;
     if(!busy&&state.round?.status==='running') {
       state.round.stopReason='manual-pause';state.round.stopReasonText=SEND_STOP_TEXT['manual-pause'];
@@ -804,6 +822,7 @@ async function handleCommand(message) {
   if(type==='MAIL_TEST') {
     // 只有用户点击“发送测试邮件”才调用，测试通知与故障事件分开。
     const {config}=await chrome.storage.local.get('config');
+    if(!mailAlertsEnabled(config))throw new Error('邮件告警已关闭；请先启用邮件告警再发送测试邮件。');
     const response=await fetch(`${MAIL}/alert`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${config.mailBridgeToken}`},body:JSON.stringify({incidentId:`test-${crypto.randomUUID()}`,reason:'司凤转发（dead-mom sharing)：这是一封由你点击发送的测试邮件。',at:new Date().toISOString(),accountName:config.account?.name||'未绑定'}),signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new Error(`测试邮件发送失败（${response.status}），请检查本地邮件服务。`);
     return {sent:true};
@@ -823,8 +842,10 @@ async function handleCommand(message) {
       enqueue(cached,Array.isArray(state.preview)?state.preview:[],config,Date.now());
       if(!cached.deliveries.some(d=>d.status==='pending')) throw new Error('没有可发送的待发视频；请先试检索，或确认已有结果仍在时间窗口内。');
     }
-    if(!config.mailBridgeToken || config.mailBridgeToken.length<32) throw new Error('请填写邮件服务连接令牌（至少32位）。');
-    await mailHealth();
+    if(mailAlertsEnabled(config)){
+      if(!config.mailBridgeToken || config.mailBridgeToken.length<32) throw new Error('已启用邮件告警，请填写邮件服务连接令牌（至少32位），或关闭邮件告警后运行。');
+      await mailHealth();
+    }
     await change(({state,config})=>{
       if(epoch!==commandEpoch) throw new Error('开启操作已被后续的暂停或设置操作取消。');
       if(busy) throw new Error('任务执行中，请等待当前任务结束。');
