@@ -1,15 +1,43 @@
 {
   "manifest_version": 3,
   "name": "司凤转发（dead-mom sharing)",
-  "version": "0.1.0",
-  "version_name": "0.1.0（司凤转发 15）",
+  "version": "0.2.0",
+  "version_name": "0.2.0（自动续发与后台体验更新）",
   "description": "抖音司凤视频一键转发功能：按配置的话题和文案关键词寻找视频，使用已有结果一键启动转发，将原生视频卡片依次发给选定好友。",
   "minimum_chrome_version": "120",
-  "permissions": ["storage", "unlimitedStorage", "alarms", "scripting", "tabs", "debugger"],
-  "host_permissions": ["https://www.douyin.com/*", "http://127.0.0.1:17321/*"],
-  "background": {"service_worker": "background.js", "type": "module"},
-  "action": {"default_title": "打开司凤转发（dead-mom sharing)"},
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "scripting",
+    "tabs",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://www.douyin.com/*",
+    "http://127.0.0.1:17321/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开司凤转发（dead-mom sharing)"
+  },
   "options_page": "options.html",
-  "content_scripts": [{"matches":["https://www.douyin.com/*"],"js":["network-tap.js"],"run_at":"document_start","world":"MAIN"}],
-  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:17321"}
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.douyin.com/*"
+      ],
+      "js": [
+        "network-tap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:17321"
+  }
 }

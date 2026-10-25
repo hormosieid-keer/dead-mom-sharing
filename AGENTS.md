@@ -21,9 +21,22 @@ docs/DEVELOPMENT.md for architecture and commands, and TESTING.md for evidence l
 - Persist sending reservation before submitting input. Arm a task-bound receipt
   observer before the actual press; validate the live control for the same UID.
 - Post-press failures remain unknown. Never retry a possible send automatically.
-- Reload recovery is bounded to one first-card preparation retry per cycle;
-  challenge, account mismatch and ambiguity must not enter that retry branch.
+- Reload recovery is bounded to two refreshes (three page attempts) per pending
+  delivery before any sending input; challenge, account mismatch and ambiguity
+  must not enter that retry branch. A possible send is never retried.
+- Query budget exhaustion is a normal yield: persist completed queries and their
+  queue, drain pending deliveries before resuming the next query. Respect rate
+  limits, pause cancellation, configuration changes and no-send scan/queue modes.
+- Local rate limits are waits, not pauses. Queue-only drains all pending work
+  without searching; AUTO_LOOP repeats query/drain batches until pause or error.
+  Persist wait plans, retain round counts, and never resume uncertain sends.
+- Explicit unavailable-video evidence may skip matching pending recipients only
+  before any possible submit; preserve sent/unknown/rate history and persist
+  account/video tombstones. Missing UI or network errors are not deletion evidence.
 - Reuse the same video document for remaining recipients; do not steal focus.
+- Worker windows maximize in the background and worker tabs stay muted. New
+  windows start blank and confirm muting before navigation. Repair reused
+  workers without reloading the same video; never mute unrelated tabs.
 - Do not add CAPTCHA bypass, direct private-message APIs or credential export.
 
 ## Validation and distribution

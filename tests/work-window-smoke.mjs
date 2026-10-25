@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { defaultState, enqueue } from '../extension/core.js';
 
 const root = path.resolve(import.meta.dirname, '..');
-const refreshCase = process.env.BOT_TEST_FIRST_REFRESH === '1';
+const refreshCase = process.env.BOT_TEST_SEND_REFRESH === '1' || process.env.BOT_TEST_FIRST_REFRESH === '1';
 const results = path.join(root, 'test-results');
 await mkdir(results, { recursive: true });
 const temp = await mkdtemp(path.join(results, 'worker-window-v9-temp-'));
@@ -34,12 +34,15 @@ try {
   assert.ok(source.includes("const MAIL = 'http://127.0.0.1:17321';"));
   await writeFile(path.join(extension, 'background.js'), source.replace("const MAIL = 'http://127.0.0.1:17321';", `const MAIL = '${mail}';`));
   await writeFile(path.join(extension, 'adapter.js'), `export async function browserTask(input) {
+    if(input.action==='videoStatus')return {unavailable:false,videoId:input.videoId};
     if(input.action==='probe') return {id:'123',name:'fixture'};
     if(input.action==='openShare') {
       if(${refreshCase}) {
-        const marker='fixture-first-share-document';
-        if(!sessionStorage.getItem(marker)) sessionStorage.setItem(marker,String(performance.timeOrigin));
-        if(sessionStorage.getItem(marker)===String(performance.timeOrigin))
+        const marker='fixture-share-documents';
+        const documents=JSON.parse(sessionStorage.getItem(marker)||'[]');
+        if(!documents.includes(performance.timeOrigin)) documents.push(performance.timeOrigin);
+        sessionStorage.setItem(marker,JSON.stringify(documents));
+        if(documents.length<=2)
           return {error:'Local fixture: share entry not mounted',code:'SHARE_ENTRY_MISSING'};
       }
       return {opened:true};
@@ -47,13 +50,32 @@ try {
     if(input.action==='share'&&input.mode==='probe') return {sent:true,alreadySent:true};
     throw new Error('Unexpected test action: '+input.action);
   }`);
-  await writeFile(path.join(extension, 'options.html'), '<!doctype html><title>Local settings fixture</title><p>Settings remain selected here.</p>');
+  for(const name of ['options.html','options.css','options.js']) await copyFile(path.join(root,'extension',name),path.join(extension,name));
   context = await chromium.launchPersistentContext(path.join(temp, 'profile'), {
-    executablePath: process.env.BOT_TEST_CHROMIUM || undefined, channel: 'chromium', headless: true,
+    // Exercise native window bounds; Playwright's default per-page viewport
+    // emulation would resize a freshly attached page back to a normal window.
+    executablePath: process.env.BOT_TEST_CHROMIUM || undefined, channel: 'chromium', headless: true,viewport:null,
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
   });
   await context.route('https://www.douyin.com/**', r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Local video fixture</title>' }));
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+  await worker.evaluate(()=>{
+    globalThis.fixtureSurfaceEvents=[];
+    const update=chrome.tabs.update.bind(chrome.tabs);
+    chrome.tabs.update=async(tabId,options)=>{
+      if(options.url){
+        const tab=await chrome.tabs.get(tabId);
+        fixtureSurfaceEvents.push({kind:'navigate',muted:tab.mutedInfo?.muted===true,url:options.url});
+      }
+      return update(tabId,options);
+    };
+    const create=chrome.windows.create.bind(chrome.windows);
+    chrome.windows.create=async(options)=>{
+      const muted=options.tabId!=null?(await chrome.tabs.get(options.tabId)).mutedInfo?.muted===true:null;
+      fixtureSurfaceEvents.push({kind:'create',options,muted});
+      return create(options);
+    };
+  });
   const id = new URL(worker.url()).hostname;
   const options = await context.newPage();
   await options.goto(`chrome-extension://${id}/options.html`);
@@ -95,12 +117,22 @@ try {
   });
   assert.equal(after.state.deliveries[0].status, 'sent', JSON.stringify({ incident: after.state.incident, logs: after.state.logs }));
   assert.equal(after.state.friendReadReport.phase, 'done');
-  assert.equal(after.state.friendReadReport.build, '0.1.0（司凤转发 15）');
-  assert.equal(after.state.friendReadReport.sent, 1);
+  assert.equal(after.state.friendReadReport.build, '0.2.0（自动续发与后台体验更新）');
+  assert.equal(after.state.friendReadReport.sent, 0, 'already-sent fixture performs no new send');
+  assert.equal(after.state.round.source,'queue');
+  assert.equal(after.state.round.status,'done');
+  assert.equal(after.state.round.foundCount,1);
+  assert.equal(after.state.round.videos[0].id,'739000000000000001');
+  assert.equal(after.state.deliveries[0].attemptRoundId,null);
+  await options.waitForFunction(()=>document.getElementById('round-summary').textContent.includes('待发直发'));
+  assert.equal(await options.locator('#sent-count').textContent(),'0');
+  assert.match(await options.locator('#preview').textContent(),/此前已发送 1 张/);
   assert.equal(after.state.friendReadReport.error, undefined);
   assert.ok(after.state.friendReadReport.seq >= 2);
   assert.notEqual(after.window.id, old.windowId);
   assert.equal(after.window.focused, false, 'the work window must remain unfocused');
+  assert.equal(after.window.state,'maximized','the work window must occupy the display work area');
+  assert.equal(after.window.tabs[0].mutedInfo.muted,true,'browser-level tab muting must be enabled');
   assert.equal(after.window.tabs.length, 1);
   assert.equal(after.window.tabs[0].id, old.tabId);
   assert.equal(after.window.tabs[0].active, true);
@@ -111,16 +143,69 @@ try {
   assert.equal(settingsStayed, true);
   assert.deepEqual(requests, ['/check']);
   if(refreshCase) {
-    assert.equal(after.state.logs.filter(entry=>entry.message.includes('自动刷新当前视频')).length,1);
+    assert.equal(after.state.logs.filter(entry=>entry.message.includes('自动刷新当前视频')).length,2);
     const navigation = await worker.evaluate(async tabId => {
       const [{ result }] = await chrome.scripting.executeScript({target:{tabId},func:()=>performance.getEntriesByType('navigation')[0]?.type});
       return result;
     }, old.tabId);
     assert.equal(navigation, 'reload', 'real tabs.reload must replace the old video document');
+    const documents=await worker.evaluate(async tabId=>{
+      const [{result}]=await chrome.scripting.executeScript({target:{tabId},func:()=>JSON.parse(sessionStorage.getItem('fixture-share-documents'))});
+      return result;
+    },old.tabId);
+    assert.equal(documents.length,3,'two failed documents followed by the third successful document');
   }
-  const report = 'PASS: real extension moves the legacy inactive worker into a separate single-tab window; settings stays selected, queue run stops, no search or actual send, fake health endpoint only.' +
-    (refreshCase ? ' Missing first share entry triggers exactly one real tab reload, then preparation and report complete.' : '');
-  await writeFile(path.join(results, refreshCase?'first-refresh-v14-smoke.txt':'worker-window-v9-smoke.txt'), report + '\n');
+  if(!refreshCase){
+    const initialDocument=await worker.evaluate(async tabId=>(await chrome.scripting.executeScript({target:{tabId},func:()=>performance.timeOrigin}))[0].result,old.tabId);
+    const queueFixture=async(videoId,recipientId)=>worker.evaluate(async({videoId,recipientId})=>{
+      const {state}=await chrome.storage.local.get('state');
+      const delivery=structuredClone(state.deliveries[0]);
+      delivery.video.id=videoId;delivery.video.url='https://www.douyin.com/video/'+videoId;
+      delivery.recipient.id=recipientId;delete delivery.recipient.uid;delivery.recipient.avatarKey='fixture';
+      delivery.key=JSON.stringify([delivery.accountId,videoId,recipientId]);delivery.status='pending';delivery.error=null;
+      delete delivery.attemptRoundId;state.deliveries.push(delivery);
+      await chrome.storage.local.set({state});
+    },{videoId,recipientId});
+    const drain=async()=>{
+      const reply=await options.evaluate(()=>chrome.runtime.sendMessage({type:'SEND_PENDING'}));
+      assert.equal(reply.ok,true,JSON.stringify(reply));
+      for(let index=0;index<200;index++){
+        const status=(await options.evaluate(()=>chrome.runtime.sendMessage({type:'STATUS'}))).data;
+        assert.equal(status.state.paused,false,JSON.stringify(status.state.incident));
+        if(!status.busy&&!status.state.enabled)return status.state;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      throw new Error('Work surface fixture did not finish');
+    };
+    // Restore/unmute the owned worker; continuing the same video must repair
+    // its window without refreshing or replacing the document.
+    await worker.evaluate(async({windowId,tabId})=>{
+      await chrome.windows.update(windowId,{state:'normal'});
+      await chrome.tabs.update(tabId,{muted:false});
+    },{windowId:after.window.id,tabId:old.tabId});
+    await queueFixture('739000000000000001','fixture-second');
+    const reused=await drain();
+    const reusedWindow=await worker.evaluate(id=>chrome.windows.get(id,{populate:true}),reused.workerWindowId);
+    assert.equal(reusedWindow.id,after.window.id);assert.equal(reusedWindow.state,'maximized');
+    assert.equal(reusedWindow.focused,false);assert.equal(reusedWindow.tabs[0].mutedInfo.muted,true);
+    assert.equal(await worker.evaluate(async tabId=>(await chrome.scripting.executeScript({target:{tabId},func:()=>performance.timeOrigin}))[0].result,old.tabId),initialDocument);
+    // Close only the isolated fixture work window, then require a fresh blank
+    // window to be muted before navigating to an autoplay-capable video URL.
+    await worker.evaluate(id=>chrome.windows.remove(id),reused.workerWindowId);
+    await queueFixture('739000000000000002','fixture-third');
+    const fresh=await drain();
+    const freshWindow=await worker.evaluate(id=>chrome.windows.get(id,{populate:true}),fresh.workerWindowId);
+    assert.notEqual(freshWindow.id,after.window.id);assert.equal(freshWindow.state,'maximized');
+    assert.equal(freshWindow.focused,false);assert.equal(freshWindow.tabs[0].mutedInfo.muted,true);
+    const events=await worker.evaluate(()=>fixtureSurfaceEvents);
+    assert.equal(events.filter(event=>event.kind==='create'&&event.options.tabId!=null).every(event=>event.muted),true);
+    assert.equal(events.filter(event=>event.kind==='create'&&event.options.tabId==null).every(event=>event.options.url==='about:blank'&&event.options.focused===false),true);
+    assert.equal(events.filter(event=>event.kind==='navigate').every(event=>event.muted),true);
+    assert.deepEqual(requests,['/check','/check','/check']);
+  }
+  const report = 'PASS: real extension keeps settings selected; isolated worker is maximized, unfocused and muted. No real search, send or mail, fake health endpoint only.' +
+    (refreshCase ? ' Missing share entry triggers exactly two real tab reloads; the third document prepares successfully.' : ' Restored/unmuted worker is repaired without reloading the same video; a closed worker is recreated blank and muted before navigation.');
+  await writeFile(path.join(results, refreshCase?'send-refresh-v17-smoke.txt':'worker-surface-v23-smoke.txt'), report + '\n');
   console.log(report);
 } finally {
   await context?.close();

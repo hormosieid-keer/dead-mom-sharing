@@ -15,7 +15,8 @@ const tagName = value => str(value).replace(/^#+/, '');
 const unique = values => [...new Set(values)];
 
 export function defaultState() {
-  return { version: 1, enabled: false, paused: false, incident: null, deliveries: [], rate: [], logs: [] };
+  return { version: 1, enabled: false, paused: false, incident: null, deliveries: [], rate: [], logs: [], round: null,
+    searchCheckpoint: null, scanCheckpoint: null, resumePlan: null, unavailableVideos: [] };
 }
 
 export function makeKey(accountId, videoId, recipientId) {
@@ -133,6 +134,32 @@ export function matchRules(video, rules) {
   ));
 }
 
+// Presentation statistics are separate from the durable deduplication ledger.
+// Never clear deliveries or infer a new round from a wall-clock timestamp.
+function roundVideos(videos) {
+  return [...new Map((Array.isArray(videos) ? videos : []).map(normalizeVideo).filter(Boolean).map(video => [video.id, video])).values()];
+}
+export function beginRound(state, { kind = 'monitor', source = 'search', videos = [], queriesTotal = 0, nowMs = Date.now() } = {}) {
+  const items = roundVideos(videos);
+  state.round = { id: crypto.randomUUID(), kind, source, status: 'running', startedAt: nowMs, updatedAt: nowMs,
+    finishedAt: null, error: null, scanStatus: source === 'search' ? 'running' : 'skipped',
+    queriesDone: 0, queriesTotal, foundCount: items.length, videos: items.slice(0, 100) };
+  return state.round.id;
+}
+export function updateRoundResults(state, id, videos, { queriesDone = 0, queriesTotal = 0, done = false, nowMs = Date.now() } = {}) {
+  if (state.round?.id !== id || state.round.status !== 'running') return false;
+  const items = roundVideos(videos);
+  Object.assign(state.round, { videos: items.slice(0, 100), foundCount: items.length, queriesDone, queriesTotal,
+    scanStatus: done ? 'done' : 'running', updatedAt: nowMs });
+  return true;
+}
+export function finishRound(state, id, { status = 'done', error = null, nowMs = Date.now() } = {}) {
+  if (state.round?.id !== id || state.round.status !== 'running') return false;
+  Object.assign(state.round, { status, error, finishedAt: nowMs, updatedAt: nowMs });
+  if (state.round.scanStatus === 'running') state.round.scanStatus = status === 'done' ? 'done' : 'incomplete';
+  return true;
+}
+
 function log(state, type, message, nowMs, key) {
   state.logs ||= [];
   state.logs.unshift({ at: nowMs, level: type === 'error' ? 'error' : 'info', message, ...(key ? { key } : {}) });
@@ -143,11 +170,12 @@ export function enqueue(state, videos, config, nowMs = Date.now()) {
   const normalized = validateConfig(config, { ready: true });
   const known = new Map(state.deliveries.map(delivery => [delivery.key, delivery]));
   const windowMs = (normalized.videoWindowMinutes || DEFAULTS.videoWindowMinutes) * 60_000;
+  const unavailable = new Set((state.unavailableVideos || []).filter(item => item.accountId === normalized.account.id).map(item => item.videoId));
   let added = 0;
   for (const candidate of videos) {
     const video = normalizeVideo(candidate);
     const age = nowMs - Number(video?.publishedAt);
-    if (video?.type !== 'video' || !str(video.id) || !Number.isFinite(age) || age < 0 || age > windowMs) continue;
+    if (video?.type !== 'video' || !str(video.id) || unavailable.has(video.id) || !Number.isFinite(age) || age < 0 || age > windowMs) continue;
     for (const rule of matchRules(video, normalized.rules)) {
       for (const recipient of rule.recipients) {
         const key = makeKey(normalized.account.id, video.id, recipient.id);
@@ -168,6 +196,28 @@ export function enqueue(state, videos, config, nowMs = Date.now()) {
   return added;
 }
 
+export const UNAVAILABLE_REASONS = Object.freeze({
+  'not-found': '你要观看的视频不存在', deleted: '作品已删除', removed: '作品已下架', restricted: '作品因违规无法播放'
+});
+// Only a positively identified unavailable page, before any possible submit,
+// may reach this helper. Never resolve uncertain or confirmed deliveries here.
+export function skipUnavailableVideo(state, accountId, videoId, reason, nowMs = Date.now()) {
+  accountId = str(accountId); videoId = str(videoId);
+  if (!accountId || !/^\d+$/u.test(videoId) || !Object.hasOwn(UNAVAILABLE_REASONS, reason)) throw new Error('无效的视频失效证据');
+  let skipped = 0;
+  for (const delivery of state.deliveries) {
+    if (delivery.accountId !== accountId || delivery.video.id !== videoId || delivery.status !== 'pending') continue;
+    Object.assign(delivery, { status: 'skipped', skipReason: 'video-unavailable', unavailableReason: reason,
+      skippedRoundId: state.round?.id || null, updatedAt: nowMs, error: UNAVAILABLE_REASONS[reason] });
+    skipped++;
+  }
+  state.unavailableVideos ||= [];
+  if (!state.unavailableVideos.some(item => item.accountId === accountId && item.videoId === videoId))
+    state.unavailableVideos.push({ accountId, videoId, reason, at: nowMs });
+  log(state, 'info', `已跳过失效视频 ${videoId}：${UNAVAILABLE_REASONS[reason]}；跳过 ${skipped} 项待发，继续处理后续队列。`, nowMs);
+  return skipped;
+}
+
 function recentRate(state, nowMs) {
   return (state.rate || []).filter(entry => Number.isFinite(entry.at) && entry.at > nowMs - WINDOW_MS);
 }
@@ -184,6 +234,21 @@ export function nextDelivery(state, nowMs = Date.now(), limits = {}, preferredVi
   return videoIds.has(first.video.id) || videoIds.size < maxVideos ? first : null;
 }
 
+// The latest activity for each distinct video owns its sliding-window slot.
+// Waiting must use that same rule, including after lowering the configured cap.
+export function nextDeliveryAt(state, nowMs = Date.now(), limits = {}, preferredVideoId = null) {
+  if (!state.enabled || state.paused || state.deliveries.some(d => ['sending', 'unknown'].includes(d.status))) return null;
+  const first = (preferredVideoId && state.deliveries.find(d => d.status === 'pending' && d.video.id === preferredVideoId)) ||
+    state.deliveries.find(d => d.status === 'pending');
+  if (!first) return null;
+  const latest = new Map();
+  for (const entry of recentRate(state, nowMs)) latest.set(entry.videoId, Math.max(latest.get(entry.videoId) || 0, entry.at));
+  const cap = Number.isInteger(limits?.maxVideosPerWindow) ? limits.maxVideosPerWindow : DEFAULTS.maxVideosPerWindow;
+  if (latest.has(first.video.id) || latest.size < cap) return nowMs;
+  const expirations = [...latest.values()].map(at => at + WINDOW_MS).sort((a, b) => a - b);
+  return expirations[latest.size - cap];
+}
+
 function deliveryFor(state, key) {
   const delivery = state.deliveries.find(item => item.key === key);
   if (!delivery) throw new Error('转发记录不存在');
@@ -195,6 +260,7 @@ export function reserveDelivery(state, key, nowMs = Date.now(), limits = {}, pre
   const delivery = nextDelivery(state, nowMs, limits, preferredVideoId);
   if (!delivery || delivery.key !== key) throw new Error('当前任务不可发送：已暂停、限速或队列顺序不符');
   delivery.status = 'sending';
+  delivery.attemptRoundId = state.round?.status === 'running' ? state.round.id : null;
   delivery.updatedAt = nowMs;
   delivery.error = null;
   state.rate = [...recentRate(state, nowMs), { videoId: delivery.video.id, at: nowMs }];
@@ -202,10 +268,11 @@ export function reserveDelivery(state, key, nowMs = Date.now(), limits = {}, pre
   return delivery;
 }
 
-export function completeDelivery(state, key, nowMs = Date.now()) {
+export function completeDelivery(state, key, nowMs = Date.now(), { preExisting = false } = {}) {
   const delivery = deliveryFor(state, key);
   if (delivery.status !== 'sending') throw new Error('只有发送中的任务可以确认成功');
   delivery.status = 'sent';
+  if (preExisting) delivery.attemptRoundId = null;
   delivery.updatedAt = nowMs;
   delivery.error = null;
   // Reserve occupies a slot before interacting with the UI. Completion keeps
@@ -241,7 +308,10 @@ export function failDelivery(state, key, reason, nowMs = Date.now()) {
 
 export function recoverState(saved, nowMs = Date.now()) {
   const state = Object.assign(defaultState(), saved && typeof saved === 'object' ? saved : {});
-  for (const field of ['deliveries', 'rate', 'logs']) if (!Array.isArray(state[field])) state[field] = [];
+  for (const field of ['deliveries', 'rate', 'logs', 'unavailableVideos']) if (!Array.isArray(state[field])) state[field] = [];
+  state.unavailableVideos = [...new Map(state.unavailableVideos.filter(item => item && typeof item.accountId === 'string' && item.accountId.trim() &&
+    typeof item.videoId === 'string' && /^\d+$/u.test(item.videoId) && Object.hasOwn(UNAVAILABLE_REASONS, item.reason) && Number.isFinite(item.at))
+    .map(item => [JSON.stringify([item.accountId, item.videoId]), { accountId: item.accountId, videoId: item.videoId, reason: item.reason, at: item.at }])).values()];
   for (const delivery of state.deliveries) {
     if (!delivery || typeof delivery !== 'object') throw new Error('导入记录包含无效转发任务');
     const video = normalizeVideo(delivery.video);
@@ -265,6 +335,11 @@ export function recoverState(saved, nowMs = Date.now()) {
     .map(entry => ({ ...entry, level: entry.level || (entry.type === 'error' ? 'error' : 'info') }))
     .sort((a, b) => Number(b.at) - Number(a.at)).slice(0, MAX_LOGS);
   state.rate = recentRate(state, nowMs);
+  if (!state.round || typeof state.round.id !== 'string' || !state.round.id) state.round = null;
+  else {
+    state.round.videos = roundVideos(state.round.videos).slice(0, 100);
+    if (state.round.status === 'running') finishRound(state, state.round.id, { status: 'interrupted', nowMs });
+  }
   if (interrupted.length) log(state, 'error', `发现 ${interrupted.length} 条中断记录，已暂停等待核对`, nowMs);
   return state;
 }

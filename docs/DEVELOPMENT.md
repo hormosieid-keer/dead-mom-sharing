@@ -52,16 +52,20 @@ Linux 缺系统依赖时按 Playwright 环境说明配置；这些操作仅影�
 | `node tests/send-receipt-smoke.mjs` | 真实适配器 + CDP，本地匿名页面；无 SMTP |
 | `node tests/pointer-hover-smoke.mjs` | 真实指针，本地悬停 fixture；无 SMTP |
 | `node tests/work-window-smoke.mjs` | 真实扩展与窗口 API，stub 页面适配器，随机模拟健康检查端口 |
+| `node tests/search-continuation-smoke.mjs` | 真实扩展、存储、导航和续段闹钟；模拟预算耗尽，随机健康检查端口，无真实发送 |
+| `node tests/unavailable-video-smoke.mjs` | 真实失效检测适配器、实际扩展跳过失效队列后续发；页面及发送均为模拟，随机健康检查端口 |
 | `node tests/diagnostic-ui-smoke.mjs` | 真实设置页与模拟后台，阻断外部请求 |
 | `npm run test:extension` | 完整扩展模拟站点联调，**需要空闲 17321**，与真实邮件服务不能并行 |
 
-首条刷新恢复专项（PowerShell）：
+发送准备刷新恢复专项（PowerShell）：
 
 ```powershell
-$env:BOT_TEST_FIRST_REFRESH = '1'
+$env:BOT_TEST_SEND_REFRESH = '1'
 node tests/work-window-smoke.mjs
-Remove-Item Env:BOT_TEST_FIRST_REFRESH
+Remove-Item Env:BOT_TEST_SEND_REFRESH
 ```
+
+该模式用三个独立加载的本地文档检查：前两次缺入口，实际刷新两次后第三次成功；后台单元测试另覆盖中途好友各自的两次机会、发送预留不重复，以及点击后不重试。
 
 若测试使用已有的独立 Chromium，可设置 `BOT_TEST_CHROMIUM` 为该浏览器可执行文件的绝对路径。它是**可执行文件路径，不是用户配置目录**。示例中的路径要换成自己的测试浏览器：
 
@@ -79,7 +83,7 @@ npm run docs:images
 npm run docs:check
 ```
 
-脚本从真实 options HTML／CSS／JS 渲染六张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
+脚本从真实 options HTML／CSS／JS 渲染九张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
 
 生成后检查截图文字是否可读、未截掉关键按钮；新增或改名的图片要同时更新 README 引用。
 
@@ -93,7 +97,8 @@ npm run docs:check
 | `FRIENDS` / `DIAGNOSE` | 读取好友／分享面板，会操作页面和指针，不发送卡片 |
 | `SCAN` | 一轮查询，不发送卡片 |
 | `START` | 开启监控，可能立即向规则好友发送 |
-| `SEND_PENDING` | 不查询，发送已有待发与有效缓存；一轮后停 |
+| `SEND_PENDING` | 不查询，已有队列和有效缓存全部发完后停；限速自动等待续发 |
+| `AUTO_LOOP` | 循环抓取 → 发完队列 → 下一轮抓取，直到暂停或报错 |
 | `PAUSE` | 取消后续任务；当前可能已发生的发送需按结果处理 |
 | `MAIL_HEALTH` / `MAIL_TEST` | 前者不发邮件；后者实际发测试邮件 |
 | `RESOLVE` | 人工处理 unknown，操作为 sent／retry／skip |
@@ -109,8 +114,8 @@ npm run docs:check
 - 逐好友预留状态必须在真实发送前持久保存；重新加载页面时不能重复预留和丢失当前接收人。
 - arm 本条回执监听 → 再次核对命中同一控件 → 实际按下 → confirm。旧提示、评论及其它任务的 token 不可作回执。
 - 按下／松开回执丢失时不能重发该输入；点击后失败进入 unknown，必须由用户核对。
-- 自动刷新只用于本轮首条、未调用发送、明确缺入口／面板的错误，最多一次；验证码、账号变化、歧义不得加入重试名单。
-- 同一视频后续好友使用同一文档；保留视频限速、时间预算、去重和暂停取消。
+- 每个当前待发记录在尚未调用发送时，明确缺入口／面板／好友行／发送控件、可恢复的点击前移位或刷新加载超时，最多刷新两次（共三次页面尝试）。验证码、账号变化、歧义不得加入重试名单；一旦可能已发送，保持 unknown，不得刷新重试。
+- 同一视频后续好友正常使用同一文档，出错时仅重试当前接收人；保留视频限速、去重和暂停取消。时间预算限制开始下一条；已经开始的当前记录允许完成上述有限恢复，不因临近预算提前少试一次。
 - 不使用主动置前 API，不添加验证码绕过、隐藏真实失败或跳过邮件门槛的路径。
 
 ## 版本和打包
@@ -126,3 +131,71 @@ npm run release:verify
 公开文件由 [release-files.mjs](../scripts/release-files.mjs) 明确列出。打包拒绝运行数据、凭证文件和符号链接，生成校验和。发布指南解释完整包、扩展包、公开源码包和干净上传目录的区别。
 
 GitHub Actions 自动运行离线 JS／Python、文档和分发检查，不启动真实浏览器或 SMTP。工作流采用 [GitHub 官方 Node.js CI 指南](https://docs.github.com/en/actions/tutorials/build-and-test-code/nodejs) 的 setup-node 方式；实际支持与权限见 [ci.yml](../.github/workflows/ci.yml)。本地通过不代表 GitHub 托管运行器已执行过。
+
+## 本轮展示状态
+
+`state.round` 保存唯一 id、开始／更新时间、结束状态、来源、查询进度、完整命中数量及前 100 个视频。搜索每个查询词完成后发布进度；`state.preview` 仍作为待发直发的检索缓存，不能把界面换轮等同于清空发送账本。
+
+发送预留时把当前运行轮次写入 `delivery.attemptRoundId`。界面只统计状态为 sent 且轮次相同的记录；unknown 不计入，人工确认 sent 后可计入其原轮次。刷新页面不创建新轮次；后台重载把未结束的轮次标为 interrupted，保留已确认统计；导入时清除展示轮次，发送账本仍保留。
+
+每次持久状态写入递增 `statusRevision`，IMPORT 保持本机序号不回退。UI 同时检查请求顺序与状态序号，拒绝迟到的旧 STATUS；监听 storage.onChanged 触发刷新，保留四秒轮询兜底。上述序号与好友诊断 seq 各自负责不同的数据。
+
+
+## 查询与发送的分段调度
+
+`state.searchCheckpoint` 保存版本、配置签名、查询词序列、下一个未完成词的 `nextIndex`、规范化视频、分页截断标志、逻辑 roundId 和 query／drain 阶段。每个查询词完成后原子保存结果、进度和去重后的队列；预算检查发生在词之间，不改变单个词的既有分页逻辑。
+
+225 秒工作片段预留约 45 秒用于发送。到达查询预算时不抛故障：先发已有 pending；整个队列未清空前后续片段只发送（受既有限速约束）。队列清空后续段从 nextIndex 继续。发送恢复时间由滑动窗口的真实到期时间计算；时间／数量片段和剩余查询尽快唤醒；Chrome 可能延迟闹钟，周期检查是兜底，不承诺精确秒数。
+
+`douyin-continue` 是浏览器持久的一次性闹钟，复用同一工作循环；busy、enabled／paused 和命令序号继续守门。自动分段共用一个 running round，直到全部查询和发送完成；用户暂停结束旧展示轮次；有合法等待计划且无 sending／unknown 时，后台重启安全恢复原轮次与本轮计数，否则仍按中断处理。lastScanAt 仅在所有词完成后更新。
+
+`state.scanCheckpoint` 独立保存只读试检索的进度，预算不足返回 partial 和查询进度，下次 SCAN 继续；不会定时发消息。SEND_PENDING 始终不查询，等限速并续发直到全部队列清空后停。修改检索配置或绑定账号清除旧游标，导入／导出不携带调度进度，发送账本保持。
+
+复现真实浏览器调度（只使用匿名适配器，无真实发信）：
+
+```sh
+node tests/search-continuation-smoke.mjs
+```
+
+
+## 发送时段的结束原因
+
+后台在实际退出点记录 `queue-empty`、`rate-limit`、`time-budget`、`card-budget`、`manual-pause`，正常停止的结构化原因写入 round.stopReason／stopReasonText 和 friendReadReport.stopReason／runMode，并在诊断消息与运行记录中显示。真正失败仍保留原错误报告，不被正常结束提示覆盖。
+
+SEND_PENDING 不再在限速或片段预算用完后结束任务：这些情况创建恢复计划，保持 enabled 和 round.running；待发清空、手动暂停或报错才结束。真实失败仍保留错误和 unknown，不被正常等待提示覆盖。
+
+## 全自动循环与持久等待
+
+`AUTO_LOOP` 设置 runMode=auto-loop，复用原有检索、匹配、预留与回执流程。批内先完成所有查询词／预算分段及队列，队列未清空时不查下一批。整批完成后创建下一轮计划：有本轮新发送就尽快继续，否则按 checkIntervalSeconds 等待，防止零结果／全已发送时空转。
+
+`resumePlan={mode,roundId,reason,at}` 使用持久浏览器闹钟与周期闹钟兜底；reason 为 rate-limit／send-segment／query-segment／next-round。周期检查早于 at 时不开始新工作；过期闹钟必须仍对应当前运行模式的有效计划。PAUSE 清空计划并取消唤醒，导入／导出不携带计划。配置签名变化清除检索游标和计划。
+
+core.nextDeliveryAt 以每个不同视频的最后一次活动为准，计算滑动60秒窗口释放足够名额的时刻；同视频其它好友可立即继续。调度加少量余量，不提高发送上限，不睡眠阻塞整个后台。后台回收时，只有明确在等待且不存在 sending／unknown 的轮次可以恢复为 running；真实发送中断继续变为 unknown，禁止自动重发。
+
+全自动浏览器模拟联调（独立 Chromium、匿名适配器、随机健康端口）：
+
+```powershell
+$env:BOT_TEST_AUTO_LOOP = '1'
+node tests/search-continuation-smoke.mjs
+Remove-Item Env:BOT_TEST_AUTO_LOOP
+```
+
+## 失效视频边界
+
+`videoStatus` 只读检测当前队列视频的明确可见错误提示。它及 openShare／share probe／arm 均核对视频身份；不读评论、文案或分享内容作为失效证据。后台仅在实际发送按下前接受 VIDEO_UNAVAILABLE 与同视频的结构化证据，撤销本次预留后用 skipUnavailableVideo 跳过 pending，保留 sent／unknown 与 rate。确认阶段错误始终 unknown。
+
+`unavailableVideos` 按账号和视频 ID 持久防止失效内容重新入队；兼容旧备份，recoverState 丢弃无效标记。跳过任务有 skipReason、unavailableReason、skippedRoundId，诊断按本轮汇总；不能清空历史记录来实现统计。明确失效不消耗两次刷新恢复，也不创建邮件告警。
+
+## 区域悬浮说明
+
+options.html 用 data-help 标记区域，options.js 的 REGION_HELP 提供本地静态说明；attachHelp 同时用于静态区域和动态规则卡片。单例 role=tooltip 浮窗使用文本节点，按视口定位并限制高度，避免被嵌套卡片或屏幕边缘裁切；只读说明不调用后台。鼠标离开有120毫秒过桥时间以便进入浮窗滚动，离开浮窗、失焦、Esc或外部点击时关闭；页面滚动时跟随定位，问号离开视口后关闭。
+
+文档渲染脚本同时验证12个问号（11个静态区域加演示规则）在桌面及390px视口内的悬停／移开、键盘关闭、长说明滚动和无后台动作。新增按钮或更改模式时，同步更新对应说明及文档截图。
+
+## 后台最大化与静音
+
+查询和发送统一经过 taskTab。createWorkWindow 以 focused:false 创建窗口，再仅更新 state:maximized，保留原焦点。Chrome 不允许在同次 update 中组合 focused:false 和最大化状态，见 [Chrome windows API](https://developer.chrome.com/docs/extensions/reference/api/windows)。不请求 focused:true、active:true 或 bringToFront。
+
+新窗口先打开 about:blank；muteWorkTab 设置 muted:true 并确认 mutedInfo.muted 后才导航抖音。旧工作标签迁移前先静音，复用同视频时重新确认静音；尺寸改变后等待布局稳定。同视频不因最大化或静音而刷新。失败沿用暂停告警流程，不退回小窗口继续发送，也不修改其他标签页。
+
+work-window-smoke 使用 viewport:null 验证原生窗口，避免 Playwright 对新页模拟视口时主动还原窗口。匿名联调覆盖旧标签隔离、恢复缩小／取消静音状态、关闭后新建空白窗口和导航前已静音；设置页保持选中，无真实账号、发送或邮件。

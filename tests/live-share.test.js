@@ -121,7 +121,7 @@ test('a mismatched uid cannot fall back to a same-name friend', async () => {
   try {
     f.window.document.querySelector('[data-userid]').onclick = () => assert.fail('wrong uid must not be shared');
     await assert.rejects(f.task({ action: 'share', videoId,
-      recipient: { id: uidOf('4999999999999999'), uid: '4999999999999999', name: '测试好友甲', avatarKey: '/aweme/100x100/aweme-avatar/abc.jpeg' } }), /唯一匹配/u);
+      recipient: { id: uidOf('4999999999999999'), uid: '4999999999999999', name: '测试好友甲', avatarKey: '/aweme/100x100/aweme-avatar/abc.jpeg' } }), { code: 'SHARE_RECIPIENT_MISSING' });
   } finally { f.close(); }
 });
 
@@ -152,7 +152,7 @@ test('duplicate visible controls for the same bound UID cannot be resolved by pi
   const f = fixture(livePanel(liveRow({ uid, name: '好友甲' }) + liveRow({ uid, name: '好友乙' })), undefined, { fast: true });
   try {
     for (const control of f.window.document.querySelectorAll('[data-userid]')) control.onclick = () => assert.fail('ambiguous UID must not be sent');
-    await assert.rejects(f.task({ action: 'share', videoId, recipient: { id: uidOf(uid), uid, name: '绑定好友' } }), /唯一匹配/u);
+    await assert.rejects(f.task({ action: 'share', videoId, recipient: { id: uidOf(uid), uid, name: '绑定好友' } }), { code: 'SHARE_RECIPIENT_AMBIGUOUS' });
   } finally { f.close(); }
 });
 
@@ -164,6 +164,47 @@ test('an empty mounted popover is reported as not ready before any click', async
     assert.equal(result.code, 'SHARE_PANEL_EMPTY');
     assert.match(result.error, /尚未点击发送/u);
     assert.doesNotMatch(result.error, /昵称或头像可能已变更/u);
+  } finally { f.close(); }
+});
+
+test('a missing row send control is refreshable but multiple controls are ambiguous', async () => {
+  const uid = '7123456789012345678';
+  for (const ambiguous of [false, true]) {
+    const row = ambiguous ? liveRow().replace('</div>\n  </div>', '</div><button>分享</button>\n  </div>') : liveRow().replace('>分享</div>', '>暂不可转发</div>');
+    const f = fixture(livePanel(row), undefined, { fast: true });
+    try {
+      f.window.document.addEventListener('click', () => assert.fail('probe cannot send anything'));
+      const result = await f.task({ action: 'share', mode: 'probe', videoId, captureErrors: true,
+        recipient: { id: uidOf(uid), uid, name: '绑定好友' } });
+      assert.equal(result.code, ambiguous ? 'SHARE_CONTROL_AMBIGUOUS' : 'SHARE_CONTROL_MISSING');
+    } finally { f.close(); }
+  }
+});
+
+test('two separate share panels are ambiguous during open, probe and arm', async () => {
+  const uid = '7123456789012345678';
+  const f = fixture(livePanel() + livePanel(liveRow({ uid: '7123456789012345679' })), undefined, { fast: true });
+  try {
+    for (const request of [{ action: 'openShare' }, { action: 'share', mode: 'probe' }, { action: 'share', mode: 'arm', point: { x: 5, y: 6 } }]) {
+      const result = await f.task({ ...request, videoId, captureErrors: true, recipient: { id: uidOf(uid), uid, name: '绑定好友' } });
+      if (request.mode === 'arm') {
+        assert.equal(result.code, 'SHARE_TARGET_CHANGED');
+        assert.equal(result.retryable, false);
+        assert.equal(result.details.reason, 'panel-ambiguous');
+      } else assert.equal(result.code, 'SHARE_PANEL_AMBIGUOUS');
+    }
+  } finally { f.close(); }
+});
+
+test('a second panel appearing during recipient search stops before using stale rows', async () => {
+  const uid = '7123456789012345699';
+  const f = fixture(livePanel(), undefined, { fast: true });
+  try {
+    f.window.document.querySelector('input').oninput = () => f.window.document.body.insertAdjacentHTML('beforeend', livePanel(liveRow({ uid })));
+    f.window.document.addEventListener('click', () => assert.fail('ambiguous search results cannot be sent'));
+    const result = await f.task({ action: 'share', mode: 'probe', videoId, captureErrors: true,
+      recipient: { id: uidOf(uid), uid, name: '绑定好友' } });
+    assert.equal(result.code, 'SHARE_PANEL_AMBIGUOUS');
   } finally { f.close(); }
 });
 

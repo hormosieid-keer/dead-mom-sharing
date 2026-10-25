@@ -17,21 +17,24 @@ async function until(predicate) {
   }
   throw new Error('Options UI did not settle');
 }
-const build = '0.1.0（司凤转发 15）';
-async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false } = {}) {
+const build = '0.2.0（自动续发与后台体验更新）';
+async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {} } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension-fixture.test/options.html', runScripts: 'outside-only' });
   const { window } = dom;
   window.structuredClone = structuredClone;
-  const state = { ...defaultState(), friendReadReport: saved };
+  const state = { ...defaultState(), friendReadReport: saved, ...initialState };
   const config = { account: { id: '123', name: '测试账号' }, rules: [], mailBridgeToken: 'secret-must-not-be-copied' };
   const calls = [], copies = [];
   Object.defineProperty(window.navigator, 'clipboard', { value: { async writeText(text) {
     if (clipboardError) throw new Error('clipboard unavailable');
     copies.push(text);
   } } });
-  window.chrome = { runtime: { async sendMessage({ type }) {
+  let storageChanged;
+  window.chrome = { storage: { onChanged: { addListener: fn => {storageChanged=fn;} } }, runtime: { async sendMessage({ type }) {
     calls.push(type);
     if (type === 'STATUS') return { ok: true, data: structuredClone({ state, config, busy: false, workerBuild }) };
+    if(type==='AUTO_LOOP'&&autoLoop){state.enabled=true;state.runMode='auto-loop';return {ok:true,data:{started:true,autoLoop:true}};}
+    if(type==='PAUSE'){state.enabled=false;state.resumePlan=null;return {ok:true,data:{}};}
     if (type === 'SEND_PENDING' && manualSend) {
       state.enabled = true; state.runMode = 'queue-only';
       return { ok: true, data: { started: true, queueOnly: true } };
@@ -50,7 +53,7 @@ async function fixture({ saved, error, persistedError, workerBuild = build, clip
   window.eval(source);
   await until(() => window.document.getElementById('account-name').textContent === '测试账号');
   const $ = id => window.document.getElementById(id);
-  return { window, $, state, calls, copies, close: () => window.close() };
+  return { window, $, state, calls, copies, storageChanged:(...args)=>storageChanged(...args), close: () => window.close() };
 }
 
 test('friend read shows first-screen counts next to its button and copies only diagnostic text', async () => {
@@ -163,7 +166,7 @@ test('UI shows persisted progress, terminal success and actual background build'
     await f.window.refresh();
     assert.equal(f.$('friend-diagnostic').dataset.state, 'ready');
     assert.match(f.$('friend-diagnostic-output').value, /状态：已结束/);
-    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.1.0（司凤转发 15）/);
+    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.0（自动续发与后台体验更新）/);
   } finally { f.close(); }
 });
 
@@ -185,4 +188,140 @@ test('a detailed persisted failure is not replaced by the short request error', 
     assert.match(f.$('friend-diagnostic-output').value, /完整诊断：UID 控件 0 个/);
     assert.doesNotMatch(f.$('friend-diagnostic-output').value, /读取失败：请求失败/);
   } finally { f.close(); }
+});
+
+
+const sampleVideo={id:'739000000000000001',type:'video',publishedAt:1000,description:'本轮视频',tags:[]};
+const sentRecord=(roundId,status='sent')=>({accountId:'123',status,attemptRoundId:roundId,video:sampleVideo,recipient:{name:'演示好友'}});
+const sampleRound=(id,extra={})=>({id,kind:'monitor',source:'search',status:'done',startedAt:1000,foundCount:1,queriesDone:1,queriesTotal:1,videos:[sampleVideo],...extra});
+
+test('sent card counter includes only confirmations attributable to the current round',async()=>{
+ const f=await fixture({initialState:{round:sampleRound('now'),deliveries:[sentRecord('old'),sentRecord('now'),sentRecord('now','unknown'),sentRecord('now','pending')]}});
+ try{
+  assert.equal(f.$('sent-count').textContent,'1');
+  assert.equal(f.$('pending-count').textContent,'1');
+  assert.match(f.$('preview').textContent,/本轮已发送 1 张.*待核对 1 张.*此前已发送 1 张/);
+  f.state.deliveries[2].status='sent';await f.window.refresh();
+  assert.equal(f.$('sent-count').textContent,'2','manual confirmation of this round is reflected');
+  f.state.round=sampleRound('next',{videos:[],foundCount:0});await f.window.refresh();
+  assert.equal(f.$('sent-count').textContent,'0');
+  assert.equal(f.state.deliveries.filter(d=>d.status==='sent').length,3);
+ }finally{f.close();}
+});
+
+test('legacy history is not labeled current; an empty new scan visibly clears previous discoveries',async()=>{
+ const f=await fixture({initialState:{preview:[sampleVideo],deliveries:[sentRecord(undefined)]}});
+ try{
+  assert.equal(f.$('sent-count').textContent,'0');
+  assert.doesNotMatch(f.$('preview').textContent,/本轮视频/);
+  f.state.round=sampleRound('new');await f.window.refresh();
+  assert.match(f.$('preview').textContent,/本轮视频/);
+  f.state.round=sampleRound('empty',{videos:[],foundCount:0});await f.window.refresh();
+  assert.match(f.$('preview').textContent,/本轮未发现/);
+  assert.doesNotMatch(f.$('preview').textContent,/本轮视频/);
+ }finally{f.close();}
+});
+
+test('unavailable skips have a separate preview count and never inflate sent or pending totals',async()=>{
+ const f=await fixture({initialState:{round:sampleRound('new'),deliveries:[
+  {...sentRecord('new'),status:'skipped',skipReason:'video-unavailable'},sentRecord('new')
+ ]}});
+ try{
+  assert.equal(f.$('sent-count').textContent,'1');assert.equal(f.$('pending-count').textContent,'0');
+  assert.match(f.$('preview').textContent,/本轮已发送 1 张 · 待发 0 张 · 失效跳过 1 项/);
+ }finally{f.close();}
+});
+
+test('storage updates repaint round progress without waiting for the fallback poll',async()=>{
+ const f=await fixture();
+ try{
+  f.state.round=sampleRound('live',{status:'running',scanStatus:'running',queriesDone:1,queriesTotal:3});
+  f.storageChanged({state:{}},'local');
+  await until(()=>f.$('round-summary').textContent.includes('查询 1/3'));
+  assert.match(f.$('preview').textContent,/本轮视频/);
+  f.state.round.status='failed';f.state.round.scanStatus='incomplete';f.state.round.error='查询超时';
+  f.storageChanged({state:{}},'local');
+  await until(()=>f.$('round-summary').textContent.includes('查询未完成'));
+  assert.match(f.$('round-summary').textContent,/查询超时/);
+  assert.match(f.$('preview').textContent,/本轮视频/);
+ }finally{f.close();}
+});
+
+test('a delayed older STATUS response cannot restore stale discoveries or counters',async()=>{
+ const f=await fixture({initialState:{statusRevision:1,round:sampleRound('old')}});
+ try{
+  const previous={state:structuredClone(f.state),config:{account:{id:'123',name:'测试账号'},rules:[]},busy:false,workerBuild:build};
+  let release;const held=new Promise(resolve=>{release=resolve;});let requests=0;
+  const original=f.window.chrome.runtime.sendMessage;
+  f.window.chrome.runtime.sendMessage=message=>message.type==='STATUS'&&++requests===1?held:original(message);
+  const slow=f.window.refresh();
+  f.state.statusRevision=2;f.state.round=sampleRound('fresh',{videos:[],foundCount:0});await f.window.refresh();
+  release({ok:true,data:previous});await slow;
+  assert.match(f.$('preview').textContent,/本轮未发现/);
+  assert.match(f.$('round-summary').textContent,/发现 0 个视频/);
+ }finally{f.close();}
+});
+
+
+test('segmented search displays drain and resume stages without resetting current-round sent counts',async()=>{
+  const video={id:'1',type:'video',publishedAt:Date.now(),tags:[]};
+  const f=await fixture({initialState:{enabled:true,round:{id:'round-segments',source:'search',status:'running',stage:'waiting-send',
+    startedAt:Date.now(),foundCount:1,queriesDone:1,queriesTotal:3,videos:[video]},
+    deliveries:[{accountId:'123',status:'sent',attemptRoundId:'round-segments',video,recipient:{name:'好友'}}]}});
+  try {
+    assert.match(f.$('round-summary').textContent,/查询 1\/3.*等待自动续发剩余队列/);
+    assert.equal(f.$('sent-count').textContent,'1');
+    f.state.round.stage='waiting-search';
+    f.state.statusRevision=1;
+    f.storageChanged({state:{newValue:f.state}},'local');
+    await until(()=>f.$('round-summary').textContent.includes('队列已发完，将自动继续剩余查询'));
+    assert.equal(f.$('sent-count').textContent,'1');
+    assert.equal(f.$('incident').hidden,true);
+  } finally {f.close();}
+});
+
+test('ended queue runs show the concrete stop reason in both summary and copied report',async()=>{
+  const reason='达到本段任务时限（3 分 45 秒）';
+  const f=await fixture({saved:{at:Date.now(),seq:1,kind:'run',phase:'done',build,
+    message:`待发直发（不查询）本段已结束。停止原因：${reason}。剩余 179 项待发。`},
+    initialState:{round:{id:'queue-round',source:'queue',status:'done',startedAt:Date.now(),
+      foundCount:0,videos:[],stopReason:'time-budget',stopReasonText:reason}}});
+  try {
+    assert.match(f.$('round-summary').textContent,/结束原因：达到本段任务时限/);
+    assert.match(f.$('friend-diagnostic-output').value,/停止原因：达到本段任务时限/);
+    f.$('copy-friend-diagnostic').click();
+    await until(()=>f.copies.length===1&&!f.$('copy-friend-diagnostic').disabled);
+    assert.match(f.copies[0],/剩余 179 项待发/);
+    assert.equal(f.$('incident').hidden,true,'normal segment completion must not be shown as a failure');
+  } finally {f.close();}
+});
+
+
+test('visible automatic loop button starts AUTO_LOOP and leaves scan and queue-only actions alone',async()=>{
+  const f=await fixture({autoLoop:true});
+  try{
+    f.$('auto-loop').click();
+    await until(()=>f.calls.includes('AUTO_LOOP')&&f.$('status').textContent==='全自动循环');
+    assert.deepEqual(f.calls.filter(type=>type!=='STATUS'),['AUTO_LOOP']);
+    assert.match(f.$('run-description').textContent,/发完再抓取/);
+    assert.equal(f.$('auto-loop').disabled,true);
+    assert.equal(f.$('send-pending').disabled,true);
+    assert.equal(f.$('pause').disabled,false);
+  }finally{f.close();}
+});
+
+test('rate waits are visibly running with an automatic resume time and can be paused',async()=>{
+  const f=await fixture({initialState:{enabled:true,runMode:'queue-only',
+    resumePlan:{mode:'queue-only',roundId:'waiting',reason:'rate-limit',at:Date.now()+45000},
+    round:{id:'waiting',source:'queue',status:'running',stage:'waiting-rate',startedAt:Date.now(),videos:[],foundCount:0}}});
+  try{
+    assert.equal(f.$('status').textContent,'等待限速');
+    assert.match(f.$('run-description').textContent,/任务仍在运行.*自动继续/);
+    assert.match(f.$('round-summary').textContent,/限速解除.*自动续发/);
+    assert.equal(f.$('incident').hidden,true);
+    assert.equal(f.$('send-pending').disabled,true);
+    f.$('pause').click();
+    await until(()=>f.$('status').textContent==='已暂停'&&!f.$('pause').disabled);
+    assert.equal(f.state.resumePlan,null);
+  }finally{f.close();}
 });

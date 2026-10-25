@@ -22,6 +22,57 @@ const friendRow = (name = '小明', avatar = 'https://p3.douyinpic.com/avatar/a.
 const sharePanel = (rows = friendRow(), extra = '') =>
   `<div role="dialog"><h2>分享给朋友</h2><ul>${rows}</ul>${extra}</div>`;
 
+test('explicit unavailable page produces video-bound evidence before opening or preparing a share', async () => {
+  const f=fixture('<div class="error-page"><p>你要观看的视频不存在</p></div>');
+  try {
+    for(const action of ['videoStatus','openShare','share']) {
+      const result=await f.task({action,videoId,mode:'probe',recipient,captureErrors:true});
+      assert.equal(result.code,'VIDEO_UNAVAILABLE');
+      assert.deepEqual(JSON.parse(JSON.stringify(result.details)),{videoId,reason:'not-found',evidence:'visible-error'});
+    }
+  } finally {f.close();}
+});
+
+test('unavailable detection excludes hidden, caption, comment, recommendation and share text', async () => {
+  for(const body of [
+    '<p hidden>你要观看的视频不存在</p>',
+    '<div data-e2e="video-desc"><span>你要观看的视频不存在</span></div>',
+    '<div class="comment"><span>你要观看的视频不存在</span></div>',
+    '<aside><p>你要观看的视频不存在</p></aside>',
+    '<div role="dialog"><p>你要观看的视频不存在</p></div>',
+    '<video></video><p>你要观看的视频不存在</p>',
+    '<p>网络异常，请稍后重试</p>', '<p>正在加载</p>', '<p>账号已被封禁</p>',
+    '<p>这个视频说的是：你要观看的视频不存在</p>'
+  ]) {
+    const f=fixture(body);
+    try {assert.equal((await f.task({action:'videoStatus',videoId})).unavailable,false,body);}
+    finally {f.close();}
+  }
+});
+
+test('unavailable pages cannot override verification or a mismatching live video identity',async()=>{
+  for(const [body,path] of [
+    ['<div class="captcha">验证</div><p>你要观看的视频不存在</p>',`/video/${videoId}`],
+    ['<p>你要观看的视频不存在</p>','/video/999'],
+    ['<p>你要观看的视频不存在</p>',`/video/${videoId}?modal_id=999`],
+    ['<div data-e2e="feed-active-video" data-aweme-id="999"></div><div class="error"><p>你要观看的视频不存在</p></div>',`/video/${videoId}`]
+  ]) {
+    const f=fixture(body,path);
+    try {
+      const result=await f.task({action:'videoStatus',videoId,captureErrors:true});
+      assert.ok(result.error);assert.notEqual(result.code,'VIDEO_UNAVAILABLE');
+    } finally {f.close();}
+  }
+});
+
+test('deleted, removed and video-specific violation labels have distinct reasons',async()=>{
+  for(const [label,reason] of [['作品已删除','deleted'],['该视频已下架','removed'],['该视频因违规无法播放','restricted']]) {
+    const f=fixture(`<div class="error-page"><p>${label}。</p></div>`);
+    try {assert.equal((await f.task({action:'videoStatus',videoId,captureErrors:true})).details.reason,reason);}
+    finally {f.close();}
+  }
+});
+
 test('serialized adapter checks account identity and fails closed for missing login', async () => {
   const f = fixture();
   try {

@@ -43,6 +43,49 @@ export async function browserTask(input = {}) {
       return payload;
     } finally { clearTimeout(timer); }
   };
+  const verifyVideo = () => {
+      const actualId = location.pathname.match(/^\/video\/(\d+)\/?$/u)?.[1];
+      const modalId = new URL(location.href).searchParams.get('modal_id');
+      const playerIds = all('[data-e2e="feed-active-video"][data-aweme-id],[data-e2e="feed-active-video"][data-video-id]')
+        .map((node) => node.getAttribute('data-aweme-id') || node.getAttribute('data-video-id'));
+      // The live detail page also stamps the open video id on detail-video-info.
+      // When it is present it must agree with the URL and the queue item.
+      const detailIds = all('[data-e2e="detail-video-info"][data-e2e-aweme-id],[data-e2e="detail-video-info"][data-aweme-id]')
+        .map((node) => node.getAttribute('data-e2e-aweme-id') || node.getAttribute('data-aweme-id'))
+        .filter(Boolean);
+      if (!/^\d+$/u.test(String(input.videoId || '')) || actualId !== String(input.videoId || '') || (modalId && modalId !== String(input.videoId || '')) ||
+          playerIds.some((id) => id !== String(input.videoId || '')) ||
+          (detailIds.length === 1 && detailIds[0] !== String(input.videoId || ''))) fail('当前页面不是待发送的视频，已停止发送');
+    };
+  const unavailableVideo = () => {
+    verifyVideo();
+    checkChallenge();
+    const labels = new Map([
+      ['你要观看的视频不存在', 'not-found'], ['视频不存在', 'not-found'], ['该视频不存在', 'not-found'],
+      ['作品已删除', 'deleted'], ['该作品已删除', 'deleted'], ['视频已删除', 'deleted'], ['该视频已被删除', 'deleted'],
+      ['作品已下架', 'removed'], ['该作品已下架', 'removed'], ['视频已下架', 'removed'], ['该视频已下架', 'removed'],
+      ['该视频因违规无法播放', 'restricted'], ['作品因违规无法播放', 'restricted'], ['该作品因违规已被封禁', 'restricted']
+    ]);
+    const content = '[data-e2e*="desc"],[data-e2e*="title"],[data-e2e*="comment"],[data-e2e*="recommend"],[data-e2e*="share"],'+
+      '[class*="comment"],[class*="Comment"],[class*="caption"],[class*="Caption"],[class*="description"],'+
+      'aside,nav,a,[role="dialog"],textarea,input,[contenteditable="true"]';
+    const errorZone = '[data-e2e*="error"],[class*="error"],[class*="Error"],[class*="not-found"],[class*="notFound"],[role="alert"]';
+    const hasPlayer = all('video,[data-e2e="detail-video-info"],[data-e2e="feed-active-video"]').length > 0;
+    for (const node of all('div,span,p,h1,h2,h3,strong')) {
+      if (node.closest(content) || node.querySelector('script,style')) continue;
+      const text = normalize(node.textContent).replace(/[。！!]+$/u, '');
+      const reason = labels.get(text);
+      if (!reason || (!node.closest(errorZone) && hasPlayer)) continue;
+      // Match a standalone page error, never an ancestor containing a caption.
+      if ([...node.children].some(child => normalize(child.textContent).replace(/[。！!]+$/u, '') === text)) continue;
+      const error = new Error('视频已失效：' + text);
+      error.code = 'VIDEO_UNAVAILABLE';
+      error.details = { videoId: String(input.videoId), reason, evidence: 'visible-error' };
+      throw error;
+    }
+    return { unavailable: false, videoId: String(input.videoId) };
+  };
+  if (input.action === 'videoStatus') return unavailableVideo();
   if (input.action === 'probe') {
     const payload = await read('/aweme/v1/web/user/profile/self/?aid=6383&device_platform=webapp');
     const user = payload.user;
@@ -321,7 +364,7 @@ export async function browserTask(input = {}) {
       (node.querySelector('[data-userid]') || avatarImage(node)));
     const pool = complete.length ? complete : unique;
     const smallest = pool.filter((node) => !pool.some((other) => other !== node && node.contains(other)));
-    if (smallest.length !== 1) fail('未能唯一识别原生分享好友面板，请把鼠标移到视频分享箭头展开面板后重试');
+    if (smallest.length !== 1) fail('未能唯一识别原生分享好友面板，请把鼠标移到视频分享箭头展开面板后重试',smallest.length?'SHARE_PANEL_AMBIGUOUS':'SHARE_PANEL_EMPTY');
     return smallest[0];
   };
   const friendPanel = () => {
@@ -330,8 +373,10 @@ export async function browserTask(input = {}) {
     return popover && visible(popover) ? popover : scoped;
   };
   if (input.action === 'openShare') {
+    if (input.videoId) unavailableVideo();
     if (!input.reopen) {
-      try { panel(); return { opened: true, via: 'already-open' }; } catch { /* Open a closed panel. */ }
+      try { panel(); return { opened: true, via: 'already-open' }; }
+      catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* Open a closed panel. */ }
     }
     const activePlayers = all('[data-e2e="feed-active-video"]');
     const shareControls = (root) => {
@@ -491,7 +536,7 @@ export async function browserTask(input = {}) {
     // Rows can mount a moment after the popover itself.
     for (let i = 0; i < 12 && listFriends(root).length === 0; i++) {
       await wait();
-      try { root = friendPanel(); } catch { /* keep the last root */ }
+      try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* keep the last root */ }
     }
     const byId = new Map();
     let ambiguous = false;
@@ -616,21 +661,8 @@ export async function browserTask(input = {}) {
   if (input.action === 'share') {
     const videoId = String(input.videoId || '');
     const mode = ['probe', 'arm', 'confirm'].includes(input.mode) ? input.mode : 'click';
-    const verifyVideo = () => {
-      const actualId = location.pathname.match(/^\/video\/(\d+)\/?$/u)?.[1];
-      const modalId = new URL(location.href).searchParams.get('modal_id');
-      const playerIds = all('[data-e2e="feed-active-video"][data-aweme-id],[data-e2e="feed-active-video"][data-video-id]')
-        .map((node) => node.getAttribute('data-aweme-id') || node.getAttribute('data-video-id'));
-      // The live detail page also stamps the open video id on detail-video-info.
-      // When it is present it must agree with the URL and the queue item.
-      const detailIds = all('[data-e2e="detail-video-info"][data-e2e-aweme-id],[data-e2e="detail-video-info"][data-aweme-id]')
-        .map((node) => node.getAttribute('data-e2e-aweme-id') || node.getAttribute('data-aweme-id'))
-        .filter(Boolean);
-      if (!/^\d+$/u.test(videoId) || actualId !== videoId || (modalId && modalId !== videoId) ||
-          playerIds.some((id) => id !== videoId) ||
-          (detailIds.length === 1 && detailIds[0] !== videoId)) fail('当前页面不是待发送的视频，已停止发送');
-    };
     verifyVideo();
+    if (mode !== 'confirm') unavailableVideo();
     const recipient = input.recipient;
     const recipientUid = /^\d+$/u.test(String(recipient?.uid || '')) ? String(recipient.uid) : '';
     if (typeof recipient?.id === 'string' && recipient.id.startsWith('uid:') && recipient.id !== 'uid:' + recipientUid) {
@@ -683,14 +715,15 @@ export async function browserTask(input = {}) {
         const changed = (reason, retryable = false, detail = {}) => {
           const labels = { 'invalid-point':'坐标无效', 'panel-closed':'分享面板关闭', 'target-missing':'好友行尚未挂载',
             'identity-ambiguous':'好友匹配不唯一', 'control-missing':'分享按钮尚未挂载', 'control-ambiguous':'分享按钮不唯一',
-            'uid-mismatch':'接收人不一致', 'hit-mismatch':'鼠标落点已偏移' };
+            'uid-mismatch':'接收人不一致', 'hit-mismatch':'鼠标落点已偏移', 'panel-ambiguous':'分享面板不唯一' };
           const error = new Error('分享控件在点击前发生变化（' + labels[reason] + '），尚未点击发送；请重试本条待发视频');
           error.code='SHARE_TARGET_CHANGED';error.retryable=retryable;error.details={reason,...detail};
           throw error;
         };
         if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) changed('invalid-point');
         let entries;
-        try { entries = recipientRows(friendPanel()); } catch { changed('panel-closed',true); }
+        try { entries = recipientRows(friendPanel()); }
+        catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') changed('panel-ambiguous'); else changed('panel-closed',true); }
         if (entries.length !== 1) changed(entries.length ? 'identity-ambiguous' : 'target-missing', entries.length===0);
         const candidates = controls(entries[0].row, /^(发送|分享)$/u);
         if (candidates.length !== 1) changed(candidates.length ? 'control-ambiguous' : 'control-missing', candidates.length===0);
@@ -779,7 +812,7 @@ export async function browserTask(input = {}) {
 
     let root;
     try { root = friendPanel(); }
-    catch { fail('分享面板尚未展开或好友行尚未加载；尚未点击发送', 'SHARE_PANEL_EMPTY'); }
+    catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; fail('分享面板尚未展开或好友行尚未加载；尚未点击发送', 'SHARE_PANEL_EMPTY'); }
     const rowsReady = () => recipientUid ? all('[data-userid]', root).some((node) => /^\d{4,25}$/u.test(normalize(node.getAttribute('data-userid')))) : listFriends(root).length > 0;
     const noRows = () => fail(`分享面板未加载可识别的好友行（UID 控件 ${all('[data-userid]', root).length} 个，视口 ${innerWidth}×${innerHeight}，页面可见性 ${document.visibilityState}）；尚未点击发送`, 'SHARE_PANEL_EMPTY');
     // The popover can be mounted before its virtualized rows are. Without this
@@ -787,7 +820,7 @@ export async function browserTask(input = {}) {
     for (let i = 0; i < 12 && !rowsReady(); i++) {
       await wait();
       checkChallenge();
-      try { root = friendPanel(); } catch { /* keep the last root */ }
+      try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* keep the last root */ }
     }
     // A background shell with no mounted friends is not a name-search failure.
     // Do not type into it; let the caller reopen it once before any send click.
@@ -821,7 +854,7 @@ export async function browserTask(input = {}) {
         for (let i = 0; i < 12 && !matches.length; i++) {
           await wait();
           checkChallenge();
-          try { root = friendPanel(); } catch { /* the popover may re-render */ }
+          try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* the popover may re-render */ }
           matches = match();
           noteSeen();
         }
@@ -835,7 +868,7 @@ export async function browserTask(input = {}) {
             liveInput.dispatchEvent(new Event('change', { bubbles: true }));
           }
           await wait();
-          try { root = friendPanel(); } catch { /* keep the last root */ }
+          try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* keep the last root */ }
           matches = match();
           noteSeen();
         }
@@ -854,7 +887,7 @@ export async function browserTask(input = {}) {
         scroller.scrollTop = 0;
         scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
         await wait();checkChallenge();
-        try { root = friendPanel(); } catch { /* recover below if rows disappeared */ }
+        try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* recover below if rows disappeared */ }
         matches = match();noteSeen();
         if (!scroller.isConnected) scroller = findScroller();
       }
@@ -865,7 +898,7 @@ export async function browserTask(input = {}) {
         scroller.scrollTop = Math.min(Math.max(0, scroller.scrollHeight-scroller.clientHeight), top + step);
         scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
         await wait();
-        try { root = friendPanel(); } catch { /* rows recycle while scrolling */ }
+        try { root = friendPanel(); } catch(error) { if(error.code==='SHARE_PANEL_AMBIGUOUS') throw error; /* rows recycle while scrolling */ }
         matches = match();
         noteSeen();
         if (!scroller.isConnected) scroller = findScroller();
@@ -875,12 +908,12 @@ export async function browserTask(input = {}) {
     if (matches.length !== 1 && !rowsReady()) {
       noRows();
     }
-    if (matches.length !== 1) fail('找不到唯一匹配的好友（已扫描 ' + scanned.size + ' 位）；本条尚未点击发送，请核对原生分享面板中的目标好友');
+    if (matches.length !== 1) fail('找不到唯一匹配的好友（已扫描 ' + scanned.size + ' 位）；本条尚未点击发送，请核对原生分享面板中的目标好友',matches.length?'SHARE_RECIPIENT_AMBIGUOUS':'SHARE_RECIPIENT_MISSING');
     if (matches[0].unsafeAvatar) fail('好友头像为默认或重复头像，缺少稳定账号 ID，已停止发送');
     const { row } = matches[0];
     // The live per-friend control is a div[data-userid] labelled 分享, not a
     // button, so the row's own uid control is accepted here and nowhere else.
-    if (rowSent(row)) return { sent: true, alreadySent: true };
+    if (rowSent(row)) return { sent: true, alreadySent: true, existingBeforeSend: true };
     const selected = [...root.querySelectorAll('input[type="checkbox"]:checked,[role="checkbox"][aria-checked="true"]')];
     if (selected.some((node) => !row.contains(node))) fail('分享面板已有其他选中好友，请先取消选择');
     const send = controls(row, /^(发送|分享)$/u);
@@ -890,10 +923,15 @@ export async function browserTask(input = {}) {
     if (mode === 'probe') {
       // Hand the exact on-screen point back to the browser's own input pipeline.
       // Nothing is clicked here: the caller performs the trusted click.
-      if (send.length !== 1) return { fallback: true, reason: '好友行没有唯一的逐行分享控件' };
+      if(send.length>1) fail('好友行有多个发送按钮，尚未发送','SHARE_CONTROL_AMBIGUOUS');
+      if(!send.length) {
+        const checkboxes=[...row.querySelectorAll('input[type="checkbox"],[role="checkbox"]')].filter(node=>!node.disabled&&node.getAttribute('aria-disabled')!=='true');
+        if(checkboxes.length===1) return { fallback: true, reason: '使用原生单好友选择及确认控件' };
+        fail('未找到好友行的转发按钮，尚未点击发送',checkboxes.length?'SHARE_CONTROL_AMBIGUOUS':'SHARE_CONTROL_MISSING');
+      }
       const controlUid = normalize(send[0].getAttribute('data-userid'));
       if (controlUid && controlUid !== recipientUid) fail('分享按钮与目标好友的账号 ID 不一致，已停止发送');
-      if (!controlUid && recipientUid) return { fallback: true, reason: '分享控件缺少账号 ID' };
+      if (!controlUid && recipientUid) fail('分享控件缺少账号 ID，尚未点击发送','SHARE_CONTROL_MISSING');
       if (typeof send[0].scrollIntoView === 'function') send[0].scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const point = pointOf(send[0]);
       return { prepared: true, x: point.x, y: point.y, uid: controlUid, name: matches[0].friend.name };

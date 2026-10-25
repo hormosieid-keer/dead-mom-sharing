@@ -6,7 +6,7 @@ import path from 'node:path';
 // credentials, logs and test outputs are deliberately not source releases.
 export const PUBLIC_ENTRIES = [
   'extension', 'runner', 'deploy', 'scripts', 'tests', 'docs', '.github',
-  'README.md', 'TESTING.md', 'THIRD_PARTY.md', 'AGENTS.md', 'CONTRIBUTING.md',
+  'README.md', 'CHANGELOG.md', 'TESTING.md', 'THIRD_PARTY.md', 'AGENTS.md', 'CONTRIBUTING.md',
   'SECURITY.md', 'LICENSE', '.env.example', '.gitignore', '.dockerignore',
   'requirements-runner.txt', 'start-mail.ps1', 'start-server.ps1',
   'package.json', 'package-lock.json'

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultState, validateConfig, normalizeVideo, collectVideos, matchRules, enqueue,
-  nextDelivery, reserveDelivery, completeDelivery, failDelivery, abortDelivery, recoverState,
-  resolveDelivery, makeKey
+  nextDelivery, nextDeliveryAt, reserveDelivery, completeDelivery, failDelivery, abortDelivery, recoverState,
+  resolveDelivery, makeKey, beginRound, updateRoundResults, finishRound, skipUnavailableVideo
 } from '../extension/core.js';
 
 const NOW = 1_800_000_000_000;
@@ -15,6 +15,63 @@ const raw = (id = '1', overrides = {}) => ({ aweme_id: id, create_time: NOW / 10
   text_extra: [{ type: 1, hashtag_id: 'tag-1', hashtag_name: '爱慕杰' }], ...overrides });
 const video = (id = '1', overrides = {}) => normalizeVideo(raw(id, overrides));
 const running = () => ({ ...defaultState(), enabled: true });
+
+test('unavailable videos skip only matching pending recipients, retaining confirmations, uncertainty and limits',()=>{
+  const state=running(),settings=config([rule({recipients:['a','b','c','d','e'].map(friend)})]);
+  enqueue(state,[video(),video('2')],settings,NOW);
+  enqueue(state,[video()],{...settings,account:{id:'other'}},NOW);
+  const [sent,unknown,sending]=state.deliveries;
+  sent.status='sent';unknown.status='unknown';sending.status='sending';
+  state.rate=[{videoId:'1',at:NOW}];beginRound(state,{nowMs:NOW});
+  assert.equal(skipUnavailableVideo(state,'bot','1','not-found',NOW),2);
+  assert.deepEqual(state.deliveries.slice(0,5).map(d=>d.status),['sent','unknown','sending','skipped','skipped']);
+  assert.ok(state.deliveries.slice(5).every(d=>d.status==='pending'));
+  assert.deepEqual(state.rate,[{videoId:'1',at:NOW}]);
+  assert.equal(state.deliveries.filter(d=>d.status==='sent'&&d.attemptRoundId===state.round.id).length,0);
+  assert.equal(state.unavailableVideos.length,1);
+  assert.equal(skipUnavailableVideo(state,'bot','1','not-found',NOW),0);
+  assert.equal(state.unavailableVideos.length,1);
+});
+
+test('unavailable evidence survives recovery and prevents stale search results for newly selected friends',()=>{
+  const state=running();enqueue(state,[video()],config(),NOW);
+  skipUnavailableVideo(state,'bot','1','not-found',NOW);
+  state.unavailableVideos.push(null,{accountId:'bot',videoId:1,reason:'not-found',at:NOW},{accountId:'bot',videoId:'2',reason:'network',at:NOW});
+  const restored=recoverState(structuredClone(state),NOW);
+  assert.equal(restored.unavailableVideos.length,1);
+  assert.equal(enqueue(restored,[video()],config([rule({recipients:[friend('new')]})]),NOW),0);
+  assert.equal(enqueue(restored,[video()],{...config(),account:{id:'another'}},NOW),1);
+  assert.throws(()=>skipUnavailableVideo(restored,'bot','2','network',NOW),/无效/);
+});
+
+test('round changes preserve deduplication and rate history; interrupted confirmation stays attributable', () => {
+  const state=running();
+  enqueue(state,[video()],config(),NOW);
+  const first=beginRound(state,{nowMs:NOW});
+  reserveDelivery(state,state.deliveries[0].key,NOW);
+  failDelivery(state,state.deliveries[0].key,'回执不明',NOW);
+  const restored=recoverState(structuredClone(state),NOW+1);
+  assert.equal(restored.round.status,'interrupted');
+  resolveDelivery(restored,restored.deliveries[0].key,'sent',NOW+2);
+  assert.equal(restored.deliveries[0].attemptRoundId,first);
+  const oldRate=structuredClone(restored.rate);
+  const second=beginRound(restored,{nowMs:NOW});
+  assert.notEqual(second,first,'same wall-clock time must still create a distinct round');
+  assert.equal(restored.deliveries.filter(d=>d.status==='sent'&&d.attemptRoundId===second).length,0);
+  assert.equal(enqueue(restored,[video()],config(),NOW+3),0,'statistics must not discard deduplication');
+  assert.deepEqual(restored.rate,oldRate);
+});
+
+test('only the active round can publish results; preview is unique and bounded with a full count', () => {
+  const state=running(),old=beginRound(state),current=beginRound(state);
+  const videos=Array.from({length:105},(_,i)=>video(String(i+1)));
+  assert.equal(updateRoundResults(state,old,videos),false);
+  assert.equal(updateRoundResults(state,current,[...videos,videos[0]],{done:true}),true);
+  assert.equal(state.round.foundCount,105);
+  assert.equal(state.round.videos.length,100);
+  finishRound(state,current);
+  assert.equal(updateRoundResults(state,current,[]),false,'late progress cannot replace a finished round');
+});
 function sendNext(state, time = NOW) {
   const item = nextDelivery(state, time);
   assert.ok(item);
@@ -349,4 +406,24 @@ test('disabled and paused states cannot send; recovery tolerates missing arrays'
   state.paused = true;
   assert.equal(nextDelivery(state, NOW), null);
   assert.deepEqual(recoverState({ deliveries: null, logs: null, rate: null }, NOW).deliveries, []);
+});
+
+
+test('rate wait expires at the latest activity of each distinct video and agrees with nextDelivery',()=>{
+  const state=running();enqueue(state,[video('9')],config(),NOW);
+  state.rate=[{videoId:'1',at:NOW-50000},{videoId:'1',at:NOW-10000},{videoId:'2',at:NOW-20000}];
+  const ready=nextDeliveryAt(state,NOW,{maxVideosPerWindow:2});
+  assert.equal(ready,NOW+40000);
+  assert.equal(nextDelivery(state,ready-1,{maxVideosPerWindow:2}),null);
+  assert.ok(nextDelivery(state,ready,{maxVideosPerWindow:2}));
+});
+
+test('lowered video caps wait for enough distinct slots, while the current video can continue now',()=>{
+  const state=running();enqueue(state,[video('9')],config(),NOW);
+  state.rate=[{videoId:'1',at:NOW-50000},{videoId:'2',at:NOW-30000},{videoId:'3',at:NOW-10000}];
+  assert.equal(nextDeliveryAt(state,NOW,{maxVideosPerWindow:1}),NOW+50000);
+  state.rate.push({videoId:'9',at:NOW-1});
+  assert.equal(nextDeliveryAt(state,NOW,{maxVideosPerWindow:1}),NOW);
+  state.paused=true;
+  assert.equal(nextDeliveryAt(state,NOW,{maxVideosPerWindow:1}),null);
 });
