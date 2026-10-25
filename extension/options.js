@@ -1,5 +1,5 @@
 const $ = id=>document.getElementById(id);
-const UI_BUILD='0.2.1（邮件可选与暂停修复）';
+const UI_BUILD='0.2.2（搜索验证识别修复）';
 const mailEnabled=cfg=>typeof cfg?.mailAlertsEnabled==='boolean'?cfg.mailAlertsEnabled:!!cfg?.mailBridgeToken?.trim();
 let config, snapshot, friends=[],dirty=false,noticeTimer;
 let statusRequest=0,statusApplied=0,statusRevision=-1,statusRefreshTimer;
@@ -203,7 +203,7 @@ function showFriendReport(report,{local=false}={}) {
   $('friend-diagnostic').dataset.state=report.phase==='running'?'loading':report.error||partial?'error':'ready';
   for(const [id,value] of [['friend-first-observed',first?.controls],['friend-first-recognized',first?.recognized],['friend-first-rejected',first?.rejected]]) $(id).textContent=value??'—';
   const kinds={friends:'好友读取',diagnose:'分享面板诊断',run:'查询／发送',scan:'试检索'};
-  const lines=['好友读取诊断 · v0.2.1',`时间：${time(report.at)}`,
+  const lines=['好友读取诊断 · v0.2.2',`时间：${time(report.at)}`,
     '报告版本：'+(report.build||'历史记录（未记录版本）'),'当前后台：'+(snapshot?.workerBuild||'未确认，请重新加载扩展'),
     '类型：'+(kinds[report.kind]||'历史报告')+'；状态：'+(report.phase==='running'?'进行中':report.error?'失败':'已结束')];
   if(report.error) {

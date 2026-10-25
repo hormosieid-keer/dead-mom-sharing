@@ -17,7 +17,7 @@ async function until(predicate) {
   }
   throw new Error('Options UI did not settle');
 }
-const build = '0.2.1（邮件可选与暂停修复）';
+const build = '0.2.2（搜索验证识别修复）';
 async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {},configOverrides = {} } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension-fixture.test/options.html', runScripts: 'outside-only' });
   const { window } = dom;
@@ -167,7 +167,7 @@ test('UI shows persisted progress, terminal success and actual background build'
     await f.window.refresh();
     assert.equal(f.$('friend-diagnostic').dataset.state, 'ready');
     assert.match(f.$('friend-diagnostic-output').value, /状态：已结束/);
-    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.1（邮件可选与暂停修复）/);
+    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.2（搜索验证识别修复）/);
   } finally { f.close(); }
 });
 

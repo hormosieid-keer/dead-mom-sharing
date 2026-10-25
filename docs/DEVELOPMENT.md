@@ -50,6 +50,7 @@ Linux 缺系统依赖时按 Playwright 环境说明配置；这些操作仅影�
 | 命令 | 使用的适配与端口 |
 | --- | --- |
 | `node tests/send-receipt-smoke.mjs` | 真实适配器 + CDP，本地匿名页面；无 SMTP |
+| `node tests/search-challenge-smoke.mjs` | 真实适配器与 Chromium 可见性；虚构图片验证提示、等待期间中断、内嵌页检查；阻断外部网络 |
 | `node tests/pointer-hover-smoke.mjs` | 真实指针，本地悬停 fixture；无 SMTP |
 | `node tests/work-window-smoke.mjs` | 真实扩展与窗口 API，stub 页面适配器，随机模拟健康检查端口 |
 | `node tests/search-continuation-smoke.mjs` | 真实扩展、存储、导航和续段闹钟；模拟预算耗尽，随机健康检查端口，无真实发送 |

@@ -1096,7 +1096,7 @@ test('a rejected mail token is distinguished from a network failure', async t =>
   await assert.rejects(worker.command({ type: 'MAIL_HEALTH' }), /连接令牌不匹配/u);
 });
 
-const diagnosticBuild = '0.2.1（邮件可选与暂停修复）';
+const diagnosticBuild = '0.2.2（搜索验证识别修复）';
 function oldDiagnostic(state = queued()) {
   state.friendReadReport = { at: 1, error: '发送前检查失败（share-prepare-v5）' };
   return state;
@@ -1450,6 +1450,32 @@ test('search publishes intermediate results and retains this round after a later
   assert.equal(store.state.round.foundCount,1);
   assert.equal(store.state.preview[0].id,video().id);
   assert.equal(store.state.deliveries.length,0,'dry search must not enqueue or send');
+});
+
+for(const mode of ['START','AUTO_LOOP','SCAN']) for(const mailEnabled of [false,true])
+test(`image verification during ${mode} pauses with a persistent notice; email enabled=${mailEnabled}`,async t=>{
+  const settings={...config(),mailAlertsEnabled:mailEnabled};
+  const original=queued(settings);
+  original.enabled=false;
+  const reason='抖音要求图片拖拽安全验证；请手动完成验证后恢复';
+  const {worker,store,calls,idle,listeners}=await harness(t,{config:settings,state:original},undefined,
+    request=>request.action==='search'?{error:reason,code:'SECURITY_CHALLENGE'}:null);
+  if(mode==='SCAN') await assert.rejects(worker.command({type:mode}),/图片拖拽安全验证/u);
+  else {await worker.command({type:mode});await idle();}
+  assert.equal(store.state.paused,true);
+  assert.equal(store.state.incident.reason,reason);
+  assert.equal(store.state.incident.notified,mailEnabled);
+  assert.match(store.state.friendReadReport.error,/图片拖拽安全验证/u);
+  assert.equal(store.state.round.status,'failed');
+  assert.equal(store.state.resumePlan,null);
+  assert.equal(store.state.deliveries.length,1);
+  assert.equal(store.state.deliveries[0].status,'pending');
+  const scripts=calls.scripts.length;
+  await listeners.alarm({name:'douyin-minute'});await idle();
+  assert.equal(calls.scripts.length,scripts,'paused verification must not resume queries on an alarm');
+  assert.equal(calls.fetch.filter(c=>c.url.endsWith('/alert')).length,mailEnabled?1:0);
+  assert.equal(calls.debugger.some(c=>c.method==='Input.dispatchMouseEvent'&&c.params?.type==='mousePressed'),false);
+  assert.equal(calls.tabs.some(c=>c.op==='reload'),false,'verification must not enter refresh recovery');
 });
 
 test('a zero-result scan replaces a previous populated round instead of showing old discoveries', async t => {

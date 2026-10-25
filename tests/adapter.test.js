@@ -379,6 +379,128 @@ test('visible challenge blocks every operation without requests or clicks', asyn
   } finally { f.close(); }
 });
 
+// Synthetic shell only. No puzzle images, answers or real verification service.
+const imageChallenge = '<section role="dialog"><h2>虚构题目</h2><div>请选择所有符合上文描述的图片，并拖拽到下方</div><div>拖拽到这里</div><button>提交</button></section>';
+
+test('image drag verification without captcha markers blocks search, account and share actions', async () => {
+  const f = fixture(imageChallenge, '/search/test');
+  try {
+    f.window.fetch = () => assert.fail('must not request');
+    f.window.document.querySelector('button').onclick = () => assert.fail('must not click verification');
+    for (const action of ['search','probe','openShare']) {
+      const result = await f.task({ action, query:'test', captureErrors:true });
+      assert.equal(result.code, 'SECURITY_CHALLENGE');
+      assert.match(result.error, /图片拖拽安全验证.*手动/u);
+    }
+  } finally { f.close(); }
+});
+
+test('hidden instructions, search content and an isolated drop label are not verification evidence', async () => {
+  const phrase = '请选择所有符合上文描述的图片，并拖拽到下方';
+  for (const body of [
+    `<div hidden>${phrase}</div>`, `<div style="display:none"><p>${phrase}</p></div>`,
+    `<div aria-hidden="true"><p>${phrase}</p></div>`, `<article><div>${phrase}</div></article>`,
+    `<div><article><p>${phrase}</p></article></div>`, `<div><p hidden>${phrase}</p></div>`,
+    `<div data-e2e="search-result-item"><p>${phrase}</p></div>`,
+    `<div data-e2e="video-desc"><span>${phrase}</span></div>`,
+    `<div class="Comment"><p>${phrase}</p></div>`, `<div contenteditable="true">${phrase}</div>`,
+    '<div>虚构题目</div><div>拖拽到这里</div>', `<div>视频讲解：${phrase}</div>`
+  ]) {
+    const f = fixture(body, '/search/test');
+    try {
+      f.window.fetch = async () => ({ok:true,json:async()=>({status_code:0,data:[],has_more:0})});
+      assert.equal((await f.task({action:'search',query:'test'})).payloads.length,1,body);
+    } finally { f.close(); }
+  }
+});
+
+test('visible split instruction in an accessible frame is detected, hidden frame is ignored', async () => {
+  for (const hidden of [false,true]) {
+    const f=fixture(`<iframe ${hidden?'hidden':''}></iframe>`,'/search/test');
+    try {
+      const frame=f.window.document.querySelector('iframe');
+      frame.contentWindow.Element.prototype.getClientRects=f.window.Element.prototype.getClientRects;
+      frame.contentDocument.body.innerHTML =
+        '<p><span>请选择所有符合上文描述的图片，</span><b>并拖拽到下方</b></p>';
+      let requests=0;
+      f.window.fetch=async()=>{requests++;return {ok:true,json:async()=>({status_code:0,data:[],has_more:0})};};
+      const result=await f.task({action:'search',query:'test',captureErrors:true});
+      assert.equal(result.code,hidden?undefined:'SECURITY_CHALLENGE');
+      assert.equal(requests,hidden?1:0);
+    } finally {f.close();}
+  }
+});
+
+test('verification markers include mixed-case captcha and visible verification frames',async()=>{
+  for(const body of ['<div class="CaptchaDialog">安全验证</div>',
+    '<iframe src="https://verification.invalid/Captcha/index"></iframe>',
+    '<iframe title="人机验证"></iframe>']) {
+    const f=fixture(body,'/search/test');
+    try {assert.equal((await f.task({action:'search',query:'test',captureErrors:true})).code,'SECURITY_CHALLENGE');}
+    finally {f.close();}
+  }
+});
+
+for (const stage of ['fetch','json']) test(`image verification interrupts a pending ${stage} and aborts without native fallback`, {timeout:2000}, async()=>{
+  const f=fixture('<button id="newest">最新发布</button>','/search/test');
+  try {
+    f.window.__DY_SENTINEL_SEARCH__=[capturedPage('test',0,{status_code:0,data:[],has_more:0})];
+    f.window.document.querySelector('button').onclick=()=>assert.fail('must not attempt native search');
+    let signal;
+    const stalled=()=>{
+      f.window.setTimeout(()=>f.window.document.body.insertAdjacentHTML('beforeend',imageChallenge),10);
+      return new Promise(()=>{});
+    };
+    f.window.fetch=(_url,options)=>{
+      signal=options.signal;
+      return stage==='fetch'?stalled():Promise.resolve({ok:true,json:stalled});
+    };
+    const result=await f.task({action:'search',query:'test',captureErrors:true});
+    assert.equal(result.code,'SECURITY_CHALLENGE');
+    assert.match(result.error,/图片拖拽安全验证/u);
+    assert.equal(signal.aborted,true);
+  } finally {f.close();}
+});
+
+test('a fresh successful response cannot conceal a simultaneously appearing verification dialog',async()=>{
+  const f=fixture('','/search/test');
+  try {
+    f.window.fetch=async()=>({ok:true,json:async()=>{
+      f.window.document.body.innerHTML=imageChallenge;
+      return {status_code:0,data:[],has_more:0};
+    }});
+    assert.equal((await f.task({action:'search',query:'test',captureErrors:true})).code,'SECURITY_CHALLENGE');
+  } finally {f.close();}
+});
+
+test('native filtering that opens image verification retains its explicit challenge error',async()=>{
+  const f=fixture('<button id="filter">筛选</button>','/search/test');
+  try {
+    f.window.__DY_SENTINEL_SEARCH__=[];
+    f.window.fetch=async()=>({ok:false,status:403});
+    f.window.document.querySelector('button').onmouseover=()=>f.window.document.body.insertAdjacentHTML('beforeend',imageChallenge);
+    const result=await f.task({action:'search',query:'test',captureErrors:true});
+    assert.equal(result.code,'SECURITY_CHALLENGE');
+  } finally {f.close();}
+});
+
+test('request verification watchers are removed after a successful response',async()=>{
+  const f=fixture('','/search/test');
+  try {
+    let signal;
+    const originalInterval=f.window.setInterval,originalClear=f.window.clearInterval;
+    const active=new Set();
+    f.window.setInterval=(...args)=>{const id=originalInterval(...args);active.add(id);return id;};
+    f.window.clearInterval=id=>{active.delete(id);originalClear(id);};
+    f.window.fetch=async(_url,options)=>{signal=options.signal;return {ok:true,json:async()=>({status_code:0,data:[],has_more:0})};};
+    await f.task({action:'search',query:'test'});
+    assert.equal(active.size,0);
+    f.window.document.body.innerHTML=imageChallenge;
+    await new Promise(setImmediate);
+    assert.equal(signal.aborted,false,'a finished request must not react to later dialogs');
+  } finally {f.close();}
+});
+
 test('video changes during native friend search cannot send the replacement video', async () => {
   const f = fixture(sharePanel(friendRow('小红', 'https://p3.douyinpic.com/avatar/b.jpg'), '<input placeholder="搜索好友">'));
   try {

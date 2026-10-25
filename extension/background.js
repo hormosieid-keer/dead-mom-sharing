@@ -7,7 +7,7 @@ import { Pointer } from './pointer.js';
 const ALARM = 'douyin-minute';
 const CONTINUE_ALARM = 'douyin-continue';
 const MAIL = 'http://127.0.0.1:17321';
-const BUILD = '0.2.1（邮件可选与暂停修复）';
+const BUILD = '0.2.2（搜索验证识别修复）';
 const MAX_SEND_REFRESHES = 2;
 const SEND_STOP_TEXT = {
   'queue-empty':'待发队列已处理完毕',
@@ -708,7 +708,12 @@ async function cycle(dryRun = false, { queueOnly = false } = {}) {
         (error.details?'\n'+JSON.stringify(error.details):'')+panelDetail+(snapshot?'\n'+snapshot:'')});
     });
     if(requeuedTransient) {if(dryRun) throw error;return;}
-    if(dryRun) throw error;
+    if(dryRun) {
+      // Verification also needs a persistent on-page notice during a scan.
+      // A normal scan failure remains a diagnostic, not a sending incident.
+      if(error.code==='SECURITY_CHALLENGE') await pauseError(error.message);
+      throw error;
+    }
     await pauseError(error.message || '任务执行失败。');
   } finally {
     clearInterval(heartbeat);

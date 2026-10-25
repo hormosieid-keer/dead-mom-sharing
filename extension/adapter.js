@@ -22,26 +22,83 @@ export async function browserTask(input = {}) {
   const all = (selector, root = document) => [...root.querySelectorAll(selector)].filter(visible);
   const wait = () => new Promise((resolve) => setTimeout(resolve, 250));
   const checkChallenge = () => {
-    if (all('[id*="captcha"],[class*="captcha"],[data-e2e*="captcha"],iframe[src*="verify"]').length) {
-      fail('抖音要求安全验证；请手动完成验证后恢复');
+    const roots = [document], seen = new Set();
+    const markers = '[id*="captcha" i],[class*="captcha" i],[data-e2e*="captcha" i],'+
+      'iframe[src*="verify" i],iframe[src*="captcha" i],iframe[src*="challenge" i],'+
+      'iframe[title*="安全验证"],iframe[title*="人机验证"]';
+    const content = 'article,aside,nav,a,[data-e2e*="desc"],[data-e2e*="comment"],[data-e2e*="search-result"],'+
+      '[class*="comment" i],[class*="caption" i],textarea,[contenteditable="true"]';
+    // This image-selection dialog does not always have captcha in its classes.
+    // Recognize its fixed instruction, never the changing puzzle or its answer.
+    const instruction = /^请选择所有符合上文描述的图片[，,、]?并拖[拽动]到下方[。！!]?$/u;
+    while (roots.length) {
+      const root = roots.shift();
+      if (seen.has(root)) continue;
+      seen.add(root);
+      if ([...root.querySelectorAll(markers)].some(visible))
+        fail('抖音要求安全验证；请手动完成验证后恢复', 'SECURITY_CHALLENGE');
+      for (const node of root.querySelectorAll('div,span,p,label,strong,h1,h2,h3')) {
+        const raw = node.textContent || '';
+        if (raw.length > 160 || !instruction.test(raw.replace(/\s+/gu, '')) || !visible(node) || node.closest(content) || node.querySelector(content)) continue;
+        const walker = node.ownerDocument.createTreeWalker(node, 4);
+        let shown = '', text;
+        while ((text = walker.nextNode())) if (visible(text.parentElement)) shown += text.textContent;
+        if (!instruction.test(shown.replace(/\s+/gu, ''))) continue;
+        fail('抖音要求图片拖拽安全验证；请手动完成验证后恢复', 'SECURITY_CHALLENGE');
+      }
+      // Inspect accessible frames only. Cross-origin verification frames are
+      // identified by visible frame markers above, without reading their data.
+      for (const frame of root.querySelectorAll('iframe')) {
+        if (!visible(frame)) continue;
+        try { if (frame.contentDocument) roots.push(frame.contentDocument); } catch {}
+      }
     }
   };
   checkChallenge();
   const read = async (url) => {
+    checkChallenge();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
+    let challengeError, poll, observer;
+    let rejectChallenge;
+    const challenge = new Promise((_, reject) => { rejectChallenge = reject; });
+    const inspect = () => {
+      if (challengeError) return;
+      try { checkChallenge(); }
+      catch (error) {
+        challengeError = error;
+        rejectChallenge(error);
+        controller.abort();
+      }
+    };
     try {
+      // A challenge may appear while fetch or response.json is still pending.
+      // Race both stages, so even a stalled response cannot hide the dialog.
+      observer = new MutationObserver(inspect);
+      observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true,
+        attributes: true, attributeFilter: ['class','style','hidden','aria-hidden','src','title'] });
+      poll = setInterval(inspect, 250);
       let response;
-      try { response = await fetch(url, { credentials: 'include', signal: controller.signal }); }
-      catch { fail('抖音请求失败或超时；请检查登录和网络'); }
+      try { response = await Promise.race([fetch(url, { credentials: 'include', signal: controller.signal }), challenge]); }
+      catch {
+        if (challengeError) throw challengeError;
+        checkChallenge();
+        fail('抖音请求失败或超时；请检查登录和网络');
+      }
+      checkChallenge();
       if (!response.ok) fail(`抖音请求失败（HTTP ${response.status}）`);
       let payload;
-      try { payload = await response.json(); }
-      catch { fail(controller.signal.aborted ? '抖音响应读取超时' : '抖音未返回有效 JSON，可能需要验证'); }
+      try { payload = await Promise.race([response.json(), challenge]); }
+      catch {
+        if (challengeError) throw challengeError;
+        checkChallenge();
+        fail(controller.signal.aborted ? '抖音响应读取超时' : '抖音未返回有效 JSON，可能需要验证');
+      }
+      checkChallenge();
+      if (payload?.verify || payload?.verify_info || payload?.captcha) fail('抖音要求安全验证', 'SECURITY_CHALLENGE');
       if (payload?.status_code !== 0) fail(`抖音拒绝请求：${normalize(payload?.status_msg || payload?.status_code || '缺少状态码')}`);
-      if (payload.verify || payload.verify_info || payload.captcha) fail('抖音要求安全验证');
       return payload;
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); clearInterval(poll); observer?.disconnect(); }
   };
   const verifyVideo = () => {
       const actualId = location.pathname.match(/^\/video\/(\d+)\/?$/u)?.[1];
@@ -104,7 +161,8 @@ export async function browserTask(input = {}) {
     const publishTime = windowMinutes <= 1440 ? '1' : windowMinutes <= 10080 ? '7' : windowMinutes <= 259200 ? '182' : '0';
     const startedAt = Date.now();
     const validatePage = (payload, offset) => {
-      if (payload?.verify || payload?.verify_info || payload?.captcha) fail('抖音要求安全验证');
+      checkChallenge();
+      if (payload?.verify || payload?.verify_info || payload?.captcha) fail('抖音要求安全验证', 'SECURITY_CHALLENGE');
       if (payload?.status_code !== 0 || !Array.isArray(payload.data) || ![0, 1, false, true].includes(payload.has_more)) {
         fail('抖音搜索响应结构不受支持，已暂停以免漏检');
       }
@@ -240,12 +298,15 @@ export async function browserTask(input = {}) {
     try { return await directSearch(); }
     catch (directError) {
       checkChallenge();
-      if (/安全验证|验证码|HTTP 429/u.test(String(directError.message))) throw directError;
+      if (directError.code === 'SECURITY_CHALLENGE' || /安全验证|验证码|HTTP 429/u.test(String(directError.message))) throw directError;
       // Prefer an explicit failure over silently using unsorted, stale, or
       // unrelated page results. This is UI fallback, never a signer bypass.
       if (!Array.isArray(window.__DY_SENTINEL_SEARCH__)) throw directError;
       try { return await nativeSearch(); }
-      catch (nativeError) { fail(`${directError.message}；原生搜索也未确认：${nativeError.message}`); }
+      catch (nativeError) {
+        if (nativeError.code === 'SECURITY_CHALLENGE') throw nativeError;
+        fail(`${directError.message}；原生搜索也未确认：${nativeError.message}`);
+      }
     }
   }
   const HEADING = /^(分享给朋友|分享给好友|发送给朋友|发送给好友)$/u;
