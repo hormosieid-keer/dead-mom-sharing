@@ -17,10 +17,10 @@ npm run release:verify
 
 | 产物 | 用途 |
 | --- | --- |
-| `dist/dead-mom-sharing-0.2.3.zip` | 给普通用户的完整安装包：扩展 + 本地邮件服务 + 文档等 |
-| `dist/dead-mom-sharing-extension-0.2.3.zip` | 仅扩展，适合不使用邮件或已有邮件服务的用户 |
-| `dist/dead-mom-sharing-github-0.2.3.zip` | 公开源码包，内有统一的 `dead-mom-sharing/` 顶层目录 |
-| `dist/github-ready/dead-mom-sharing-0.2.3-时间戳/` | 可直接作为 Git 仓库根目录的干净文件夹 |
+| `dist/dead-mom-sharing-0.2.4.zip` | 给普通用户的完整安装包：扩展 + 本地邮件服务 + 文档等 |
+| `dist/dead-mom-sharing-extension-0.2.4.zip` | 仅扩展，适合不使用邮件或已有邮件服务的用户 |
+| `dist/dead-mom-sharing-github-0.2.4.zip` | 公开源码包，内有统一的 `dead-mom-sharing/` 顶层目录 |
+| `dist/github-ready/dead-mom-sharing-0.2.4-时间戳/` | 可直接作为 Git 仓库根目录的干净文件夹 |
 | `dist/SHA256SUMS.txt` | 两个安装包的 SHA-256 |
 | `dist/GITHUB-SHA256SUMS.txt` | 公开源码包的 SHA-256 |
 | `dist/github-export.json` | 仅本机使用的最新导出路径与校验信息，不上传 |
@@ -57,11 +57,11 @@ git push -u origin main
 
 ## 4. 创建 Release
 
-源码提交并完成检查后，创建对应的 `v0.2.3` Release，附上完整包、独立扩展包、公开源码包以及两份校验和。Release 文案可使用 [更新日志](../CHANGELOG.md) 中对应版本的内容，并应说明：
+源码提交并完成检查后，创建对应的 `v0.2.4` Release，附上完整包、独立扩展包、公开源码包以及两份校验和。Release 文案可使用 [更新日志](../CHANGELOG.md) 中对应版本的内容，并应说明：
 
 - 需要开发者模式加载 `extension/`，未通过商店分发。
 - 邮件告警可选；只有启用时需要 Python 邮件服务。不使用邮件时可单独安装扩展。
-- 当前版本为 `0.2.3（浏览器声光告警）`，实际使用仍有偶发适配问题。
+- 当前版本为 `0.2.4（告警标题显示原因）`，实际使用仍有偶发适配问题。
 - 已有离线测试和本地 Chromium fixture 联调；没有把未完成的 Ubuntu 或长期无人值守验收写成通过。
 
 仓库尚未发布 Release 时，README 中的 Code → Download ZIP 路径仍能提供源码安装。不要在 README 中放一个并不存在的 Release 下载链接或假 CI 徽章。

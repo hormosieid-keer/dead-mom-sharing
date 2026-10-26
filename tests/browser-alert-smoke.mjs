@@ -55,7 +55,8 @@ try {
   }));
   await incident('fixture-open-pages');
   await until(async()=>{const state=await status();return state.browserAlert?.status==='played'&&state.badge==='!';});
-  await until(async()=>await options.title().then(title=>title.includes('待处理'))&&await second.title().then(title=>title.includes('待处理')));
+  const warningTitle='告警：（虚构验证告警，仅测试浏览器提示）';
+  await until(async()=>await options.title().then(title=>title===warningTitle)&&await second.title().then(title=>title===warningTitle));
   const href=await options.locator('#tab-icon').getAttribute('href');
   await options.waitForFunction(href=>document.querySelector('#tab-icon').getAttribute('href')!==href,href);
   const first=await status();assert.equal(first.contexts,1);
@@ -71,13 +72,13 @@ try {
   const reopened=await context.newPage();await reopened.goto(`chrome-extension://${id}/options.html`);
   await reopened.reload();
   await worker.evaluate(()=>chrome.alarms.create('douyin-minute',{when:Date.now()+100}));
-  await until(async()=>await reopened.title().then(title=>title.includes('待处理')));
+  await until(async()=>await reopened.title().then(title=>title===warningTitle));
   assert.deepEqual((await status()).browserAlert,closed.browserAlert,'reopening or polling must not replay the incident');
   await worker.evaluate(async()=>{
     const {state}=await chrome.storage.local.get('state');state.incident=null;state.paused=false;
     await chrome.storage.local.set({state});await chrome.alarms.create('douyin-minute',{when:Date.now()+100});
   });
-  await until(async()=>!await reopened.title().then(title=>title.includes('待处理'))&&(await status()).badge==='');
+  await until(async()=>await reopened.title().then(title=>title==='司凤转发（dead-mom sharing)')&&(await status()).badge==='');
   await reopened.evaluate(()=>chrome.runtime.sendMessage({type:'PAUSE'}));
   assert.equal((await status()).incident,null);
   assert.equal(external,0,'no HTTP service or real account should be contacted');

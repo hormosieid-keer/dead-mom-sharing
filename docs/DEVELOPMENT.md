@@ -129,6 +129,8 @@ npm run docs:check
 
 浏览器声光告警由 `browser-alerts.js` 维护，与邮件配置独立。真实事故的 id 在原子 `change` 中声明一次 `state.browserAlert`，重复轮询、多设置页和后台重启不重复播放。结果标记 played／blocked；失败不取消原暂停、不影响邮件通知。恢复清除 incident 后清空工具栏徽标，设置页按状态恢复标题和 favicon。
 
+设置页标题使用纯文本 `告警：（incident.reason）`，合并多余空白，空原因使用“需要人工处理”；每次有效状态刷新更新原因，不受已有闪烁计时器影响。解除真实告警后还原页面原标题，不把标题变化当作声音重播或发送确认。
+
 隐藏音频页使用 [Chrome offscreen](https://developer.chrome.com/docs/extensions/reference/api/offscreen) 的 `AUDIO_PLAYBACK` 理由，播放打包在扩展内的 WAV，不打开或聚焦窗口；由浏览器管理无音频后的生命周期。消息限定自己的扩展 id、目标与动作。设置页仅绘制闪烁图标，不自行播放，从而避免多开页面重复声响。工具栏徽标使用 [action API](https://developer.chrome.com/docs/extensions/reference/api/action)。原始音频说明见 [CREDITS](../extension/audio/CREDITS.md)。
 
 ## 版本和打包

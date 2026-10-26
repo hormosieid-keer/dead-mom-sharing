@@ -1101,7 +1101,7 @@ test('a rejected mail token is distinguished from a network failure', async t =>
   await assert.rejects(worker.command({ type: 'MAIL_HEALTH' }), /连接令牌不匹配/u);
 });
 
-const diagnosticBuild = '0.2.3（浏览器声光告警）';
+const diagnosticBuild = '0.2.4（告警标题显示原因）';
 function oldDiagnostic(state = queued()) {
   state.friendReadReport = { at: 1, error: '发送前检查失败（share-prepare-v5）' };
   return state;
