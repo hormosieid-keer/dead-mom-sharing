@@ -1,10 +1,11 @@
 const $ = id=>document.getElementById(id);
-const UI_BUILD='0.2.4（告警标题显示原因）';
+const UI_BUILD='0.2.5（告警红点增强）';
 const mailEnabled=cfg=>typeof cfg?.mailAlertsEnabled==='boolean'?cfg.mailAlertsEnabled:!!cfg?.mailBridgeToken?.trim();
 let config, snapshot, friends=[],dirty=false,noticeTimer;
 let statusRequest=0,statusApplied=0,statusRevision=-1,statusRefreshTimer;
 let friendDiagnosticBusy=false,friendReportAt=0,friendReportSeq=0,friendLocalReport=false;
 const normalTitle=document.title;
+const tabIcons={normal:'icons/tab.svg?v='+UI_BUILD.split('（')[0],alert:'icons/tab-alert.svg?v='+UI_BUILD.split('（')[0]};
 let alertBlink, alertVisible=false;
 function updateBrowserNotice(state) {
   const active=!!(state.paused&&(state.incident?.id||state.incident?.incidentId));
@@ -14,11 +15,11 @@ function updateBrowserNotice(state) {
     document.title='告警：'+reason;
   }
   if(active&&!alertBlink) {
-    const paint=()=>{alertVisible=!alertVisible;icon.href=alertVisible?'icons/tab-alert.svg':'icons/tab.svg';};
+    const paint=()=>{alertVisible=!alertVisible;icon.href=alertVisible?tabIcons.alert:tabIcons.normal;};
     paint();alertBlink=setInterval(paint,900);
   } else if(!active) {
     clearInterval(alertBlink);alertBlink=null;alertVisible=false;
-    icon.href='icons/tab.svg';document.title=normalTitle;
+    icon.href=tabIcons.normal;document.title=normalTitle;
   }
   $('browser-alert-error').textContent=active&&state.browserAlert?.incidentId===(state.incident?.id||state.incident?.incidentId)?state.browserAlert.error||'':'';
 }
@@ -225,7 +226,7 @@ function showFriendReport(report,{local=false}={}) {
   $('friend-diagnostic').dataset.state=report.phase==='running'?'loading':report.error||partial?'error':'ready';
   for(const [id,value] of [['friend-first-observed',first?.controls],['friend-first-recognized',first?.recognized],['friend-first-rejected',first?.rejected]]) $(id).textContent=value??'—';
   const kinds={friends:'好友读取',diagnose:'分享面板诊断',run:'查询／发送',scan:'试检索'};
-  const lines=['好友读取诊断 · v0.2.4',`时间：${time(report.at)}`,
+  const lines=['好友读取诊断 · v0.2.5',`时间：${time(report.at)}`,
     '报告版本：'+(report.build||'历史记录（未记录版本）'),'当前后台：'+(snapshot?.workerBuild||'未确认，请重新加载扩展'),
     '类型：'+(kinds[report.kind]||'历史报告')+'；状态：'+(report.phase==='running'?'进行中':report.error?'失败':'已结束')];
   if(report.error) {

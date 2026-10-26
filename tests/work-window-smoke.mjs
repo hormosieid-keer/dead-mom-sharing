@@ -160,7 +160,7 @@ try {
   }else{
   assert.equal(after.state.deliveries[0].status, 'sent', JSON.stringify({ incident: after.state.incident, logs: after.state.logs }));
   assert.equal(after.state.friendReadReport.phase, 'done');
-  assert.equal(after.state.friendReadReport.build, '0.2.4（告警标题显示原因）');
+  assert.equal(after.state.friendReadReport.build, '0.2.5（告警红点增强）');
   assert.equal(after.state.friendReadReport.sent, 0, 'already-sent fixture performs no new send');
   assert.equal(after.state.round.source,'queue');
   assert.equal(after.state.round.status,'done');

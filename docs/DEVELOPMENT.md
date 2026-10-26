@@ -89,7 +89,7 @@ npm run docs:images
 npm run docs:check
 ```
 
-脚本从真实 options HTML／CSS／JS 渲染十一张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
+脚本从真实 options HTML／CSS／JS 渲染十一张 PNG，另从实际 SVG 生成一张图标大小与明暗背景对比图；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
 
 生成后检查截图文字是否可读、未截掉关键按钮；新增或改名的图片要同时更新 README 引用。
 
@@ -130,6 +130,8 @@ npm run docs:check
 浏览器声光告警由 `browser-alerts.js` 维护，与邮件配置独立。真实事故的 id 在原子 `change` 中声明一次 `state.browserAlert`，重复轮询、多设置页和后台重启不重复播放。结果标记 played／blocked；失败不取消原暂停、不影响邮件通知。恢复清除 incident 后清空工具栏徽标，设置页按状态恢复标题和 favicon。
 
 设置页标题使用纯文本 `告警：incident.reason`，合并多余空白，空原因使用“需要人工处理”；每次有效状态刷新更新原因，不受已有闪烁计时器影响。解除真实告警后还原页面原标题，不把标题变化当作声音重播或发送确认。
+
+v0.2.5 普通图标为深蓝底，告警帧为浅金底加大红圈／白色叹号；继续使用900ms切换。图标路径附当前版本查询参数，避免升级后复用旧 favicon 缓存；测试按 URL 路径核对状态。图标由代码原生 SVG 绘制，不依赖外部图片。
 
 隐藏音频页使用 [Chrome offscreen](https://developer.chrome.com/docs/extensions/reference/api/offscreen) 的 `AUDIO_PLAYBACK` 理由，播放打包在扩展内的 WAV，不打开或聚焦窗口；由浏览器管理无音频后的生命周期。消息限定自己的扩展 id、目标与动作。设置页仅绘制闪烁图标，不自行播放，从而避免多开页面重复声响。工具栏徽标使用 [action API](https://developer.chrome.com/docs/extensions/reference/api/action)。原始音频说明见 [CREDITS](../extension/audio/CREDITS.md)。
 
@@ -205,7 +207,7 @@ Remove-Item Env:BOT_TEST_AUTO_LOOP
 
 options.html 用 data-help 标记区域，options.js 的 REGION_HELP 提供本地静态说明；attachHelp 同时用于静态区域和动态规则卡片。单例 role=tooltip 浮窗使用文本节点，按视口定位并限制高度，避免被嵌套卡片或屏幕边缘裁切；只读说明不调用后台。鼠标离开有120毫秒过桥时间以便进入浮窗滚动，离开浮窗、失焦、Esc或外部点击时关闭；页面滚动时跟随定位，问号离开视口后关闭。
 
-文档渲染脚本同时验证12个问号（11个静态区域加演示规则）在桌面及390px视口内的悬停／移开、键盘关闭、长说明滚动和无后台动作。新增按钮或更改模式时，同步更新对应说明及文档截图。
+文档渲染脚本同时验证13个问号（12个静态区域加演示规则）在桌面及390px视口内的悬停／移开、键盘关闭、长说明滚动和无后台动作。新增按钮或更改模式时，同步更新对应说明及文档截图。
 
 ## 后台最大化与静音
 

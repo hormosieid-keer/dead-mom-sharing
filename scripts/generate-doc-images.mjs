@@ -155,5 +155,18 @@ try {
   assert.equal(await page.locator('#mail-test').isEnabled(),false);
   await page.locator('[data-help="mail"]').screenshot({path:path.join(out,'optional-mail.png')});
   assert.deepEqual(await page.evaluate(from=>docsCalls.slice(from).filter(type=>type!=='STATUS'),callsBefore),[]);
-  console.log('Rendered 11 screenshots. Browser-alert controls, help hover/keyboard/scroll, optional-mail disabled controls, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
+  const icons=await browser.newPage({viewport:{width:960,height:470},deviceScaleFactor:1});
+  const normal='data:image/svg+xml,'+encodeURIComponent(files['icons/tab.svg']);
+  const alert='data:image/svg+xml,'+encodeURIComponent(files['icons/tab-alert.svg']);
+  await icons.setContent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
+    *{box-sizing:border-box}body{margin:0;padding:28px;background:#f6f5f1;color:#172c44;font:15px "Segoe UI","Microsoft YaHei",sans-serif}h1{font-size:23px;margin:0 0 8px}p{margin:0 0 20px;color:#586475}.strip{display:flex;align-items:center;gap:22px;padding:18px 22px;border-radius:12px;margin:12px 0;background:#fff;border:1px solid #e1e3e6}.strip.dark{background:#202734;color:#fff;border-color:#202734}.label{width:150px}.tab{display:flex;align-items:center;gap:9px;min-width:270px}.tab img{width:16px;height:16px}.big{display:flex;align-items:center;gap:18px;min-width:270px}.big img{width:64px;height:64px}.hint{font-size:12px;margin-top:18px}
+    </style><h1>更醒目的告警图标</h1><p>正常深蓝底 ↔ 告警浅金底与大红圈；实际运行时两种状态交替闪烁。</p>
+    <div class="strip"><span class="label">浅色标签栏 · 16px</span><span class="tab"><img src="${normal}">司凤转发</span><span class="tab"><img src="${alert}">告警：需要人工处理</span></div>
+    <div class="strip dark"><span class="label">深色标签栏 · 16px</span><span class="tab"><img src="${normal}">司凤转发</span><span class="tab"><img src="${alert}">告警：需要人工处理</span></div>
+    <div class="strip"><span class="label">4 倍放大查看</span><span class="big"><img src="${normal}">正常状态</span><span class="big"><img src="${alert}">大红圈＋白色叹号</span></div>
+    <p class="hint">图标示意：使用扩展内实际 SVG 渲染，标签文字为演示。不是用户浏览器截图。</p></html>`);
+  await icons.evaluate(()=>Promise.all([...document.images].map(image=>image.decode())));
+  await icons.screenshot({path:path.join(out,'alert-icon-comparison.png')});
+  await icons.close();
+  console.log('Rendered 11 UI screenshots and one icon comparison. Browser-alert controls, help hover/keyboard/scroll, optional-mail disabled controls, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
 } finally { await browser.close(); }

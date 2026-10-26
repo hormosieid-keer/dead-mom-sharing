@@ -17,7 +17,7 @@ async function until(predicate) {
   }
   throw new Error('Options UI did not settle');
 }
-const build = '0.2.4（告警标题显示原因）';
+const build = '0.2.5（告警红点增强）';
 async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {},configOverrides = {} } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension-fixture.test/options.html', runScripts: 'outside-only' });
   const { window } = dom;
@@ -168,7 +168,7 @@ test('UI shows persisted progress, terminal success and actual background build'
     await f.window.refresh();
     assert.equal(f.$('friend-diagnostic').dataset.state, 'ready');
     assert.match(f.$('friend-diagnostic-output').value, /状态：已结束/);
-    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.4（告警标题显示原因）/);
+    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.5（告警红点增强）/);
   } finally { f.close(); }
 });
 
@@ -364,13 +364,13 @@ test('a real incident blinks a top-right-dot favicon and clears on recovery with
     f.state.paused=true;f.state.incident={id:'ui-incident',reason:'需要处理'};
     await f.window.refresh();
     assert.equal(f.window.document.title,'告警：需要处理');
-    assert.ok(f.$('tab-icon').href.endsWith('icons/tab-alert.svg'));
-    blink();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
-    await f.window.refresh();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'),'polling must not restart the blink');
+    assert.ok(new URL(f.$('tab-icon').href).pathname.endsWith('icons/tab-alert.svg'));
+    blink();assert.ok(new URL(f.$('tab-icon').href).pathname.endsWith('icons/tab.svg'));
+    await f.window.refresh();assert.ok(new URL(f.$('tab-icon').href).pathname.endsWith('icons/tab.svg'),'polling must not restart the blink');
     f.state.incident.reason='抖音要求安全验证';await f.window.refresh();
     assert.equal(f.window.document.title,'告警：抖音要求安全验证','the current reason must update while the existing blink stays active');
     f.state.paused=false;f.state.incident=null;await f.window.refresh();
-    assert.equal(f.window.document.title,'司凤转发（dead-mom sharing)');assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
+    assert.equal(f.window.document.title,'司凤转发（dead-mom sharing)');assert.ok(new URL(f.$('tab-icon').href).pathname.endsWith('icons/tab.svg'));
     assert.deepEqual(f.calls.filter(type=>type!=='STATUS'),[],'the UI never creates duplicate playback');
   } finally {f.close();}
 });

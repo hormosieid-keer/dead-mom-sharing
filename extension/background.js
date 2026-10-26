@@ -8,7 +8,7 @@ import { createBrowserAlerts } from './browser-alerts.js';
 const ALARM = 'douyin-minute';
 const CONTINUE_ALARM = 'douyin-continue';
 const MAIL = 'http://127.0.0.1:17321';
-const BUILD = '0.2.4（告警标题显示原因）';
+const BUILD = '0.2.5（告警红点增强）';
 const MAX_SEND_REFRESHES = 2;
 const SEND_STOP_TEXT = {
   'queue-empty':'待发队列已处理完毕',
