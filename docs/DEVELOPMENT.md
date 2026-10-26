@@ -12,6 +12,10 @@ extension/
   adapter.js          可序列化注入的账号／搜索／好友／分享适配器
   pointer.js          debugger 指针移动、按下、释放和会话
   network-tap.js      原生查询响应的被动监听
+  browser-alerts.js   告警声音去重与工具栏标记
+  alert-player.*     仅播放本地提示音的隐藏扩展页面
+  audio/             原创提示音和来源说明
+  icons/             普通与告警标签图标
   options.*          设置界面
 runner/
   config.py          本地 .env 读取
@@ -51,6 +55,7 @@ Linux 缺系统依赖时按 Playwright 环境说明配置；这些操作仅影�
 | --- | --- |
 | `node tests/send-receipt-smoke.mjs` | 真实适配器 + CDP，本地匿名页面；无 SMTP |
 | `node tests/search-challenge-smoke.mjs` | 真实适配器与 Chromium 可见性；虚构图片验证提示、等待期间中断、内嵌页检查；阻断外部网络 |
+| `node tests/browser-alert-smoke.mjs` | 真实 MV3／隐藏音频页、关闭设置页播放、图标与徽标、恢复清除；音频输出静音，无外网及 SMTP |
 | `node tests/pointer-hover-smoke.mjs` | 真实指针，本地悬停 fixture；无 SMTP |
 | `node tests/work-window-smoke.mjs` | 真实扩展与窗口 API，stub 页面适配器，随机模拟健康检查端口 |
 | `node tests/search-continuation-smoke.mjs` | 真实扩展、存储、导航和续段闹钟；模拟预算耗尽，随机健康检查端口，无真实发送 |
@@ -84,7 +89,7 @@ npm run docs:images
 npm run docs:check
 ```
 
-脚本从真实 options HTML／CSS／JS 渲染十张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
+脚本从真实 options HTML／CSS／JS 渲染十一张 PNG；使用固定演示账号、好友、视频和时间。所有外部请求被拦截，发消息及发邮件的 API 没有模拟实现，误调用会失败。图片说明见 [images/README.md](images/README.md)。`install-flow.svg` 是单独绘制的流程图。
 
 生成后检查截图文字是否可读、未截掉关键按钮；新增或改名的图片要同时更新 README 引用。
 
@@ -95,6 +100,7 @@ npm run docs:check
 | 消息 | 行为 |
 | --- | --- |
 | `STATUS` | 只读：config、state、busy、workerBuild |
+| `BROWSER_ALERT_TEST` | 显式试听内置叮咚；不建立事故、不发卡片或邮件 |
 | `FRIENDS` / `DIAGNOSE` | 读取好友／分享面板，会操作页面和指针，不发送卡片 |
 | `SCAN` | 一轮查询，不发送卡片 |
 | `START` | 开启监控，可能立即向规则好友发送 |
@@ -118,6 +124,12 @@ npm run docs:check
 - 每个当前待发记录在尚未调用发送时，明确缺入口／面板／好友行／发送控件、可恢复的点击前移位或刷新加载超时，最多刷新两次（共三次页面尝试）。验证码、账号变化、歧义不得加入重试名单；一旦可能已发送，保持 unknown，不得刷新重试。
 - 同一视频后续好友正常使用同一文档，出错时仅重试当前接收人；保留视频限速、去重和暂停取消。时间预算限制开始下一条；已经开始的当前记录允许完成上述有限恢复，不因临近预算提前少试一次。
 - 不使用主动置前 API，不添加验证码绕过、隐藏真实失败或跳过邮件门槛的路径。
+
+## 浏览器声音与红点
+
+浏览器声光告警由 `browser-alerts.js` 维护，与邮件配置独立。真实事故的 id 在原子 `change` 中声明一次 `state.browserAlert`，重复轮询、多设置页和后台重启不重复播放。结果标记 played／blocked；失败不取消原暂停、不影响邮件通知。恢复清除 incident 后清空工具栏徽标，设置页按状态恢复标题和 favicon。
+
+隐藏音频页使用 [Chrome offscreen](https://developer.chrome.com/docs/extensions/reference/api/offscreen) 的 `AUDIO_PLAYBACK` 理由，播放打包在扩展内的 WAV，不打开或聚焦窗口；由浏览器管理无音频后的生命周期。消息限定自己的扩展 id、目标与动作。设置页仅绘制闪烁图标，不自行播放，从而避免多开页面重复声响。工具栏徽标使用 [action API](https://developer.chrome.com/docs/extensions/reference/api/action)。原始音频说明见 [CREDITS](../extension/audio/CREDITS.md)。
 
 ## 版本和打包
 

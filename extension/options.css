@@ -156,3 +156,7 @@ footer{color:var(--muted);font-size:11.5px;padding:26px 0 40px;text-align:center
 .mail-toggle{display:flex;align-items:center;gap:9px;color:var(--ink);font-size:14px;font-weight:600;margin:12px 0 4px;cursor:pointer}
 .mail-toggle input{width:17px;height:17px;margin:0;accent-color:var(--red)}
 #mail-token:disabled{background:#f5f5f3;color:var(--muted)}
+.browser-alert-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 20px;padding:14px 18px;background:#fff;border:1px solid var(--line);border-radius:14px;font-size:13px;color:var(--ink)}
+.browser-alert-bar small{display:block;margin-top:4px;color:var(--muted);font-size:12px}
+.browser-alert-bar #preview-alert{flex-shrink:0;margin-right:30px}
+@media(max-width:600px){.browser-alert-bar{align-items:flex-start;flex-direction:column;gap:10px}}

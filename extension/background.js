@@ -3,11 +3,12 @@ import { defaultState, validateConfig, collectVideos, matchRules, enqueue, nextD
   beginRound, updateRoundResults, finishRound, skipUnavailableVideo, UNAVAILABLE_REASONS, mailAlertsEnabled } from './core.js';
 import { browserTask } from './adapter.js';
 import { Pointer } from './pointer.js';
+import { createBrowserAlerts } from './browser-alerts.js';
 
 const ALARM = 'douyin-minute';
 const CONTINUE_ALARM = 'douyin-continue';
 const MAIL = 'http://127.0.0.1:17321';
-const BUILD = '0.2.2（搜索验证识别修复）';
+const BUILD = '0.2.3（浏览器声光告警）';
 const MAX_SEND_REFRESHES = 2;
 const SEND_STOP_TEXT = {
   'queue-empty':'待发队列已处理完毕',
@@ -50,6 +51,17 @@ function setFriendReport(state, report) {
   state.friendReadReport={...report,phase:report.error?'error':report.phase||'done',at:Date.now(),seq,build:BUILD};
   return state.friendReadReport;
 }
+const browserAlerts = createBrowserAlerts(chrome, {
+  read: async () => (await chrome.storage.local.get('state')).state,
+  claim: id => change(({state}) => {
+    if (!state.paused || (state.incident?.id || state.incident?.incidentId) !== id || state.browserAlert?.incidentId === id) return false;
+    state.browserAlert = { incidentId: id, status: 'pending', at: Date.now() };
+    return true;
+  }),
+  record: (id, error) => change(({state}) => {
+    if (state.browserAlert?.incidentId === id) Object.assign(state.browserAlert, { status: error ? 'blocked' : 'played', error });
+  })
+});
 // The check interval is a user setting, so the alarm is (re)created from it
 // instead of being fixed at one minute.
 async function scheduleAlarm() {
@@ -87,6 +99,7 @@ const ready = change(data => {
   await scheduleAlarm();
   const {state}=await chrome.storage.local.get('state');
   if(activeResumePlan(state))await chrome.alarms.create(CONTINUE_ALARM,{when:Math.max(Date.now()+500,state.resumePlan.at)});
+  await browserAlerts.sync();
 });
 
 async function execute(tabId, action, args = {}) {
@@ -346,6 +359,7 @@ async function mailHealth() {
   return result;
 }
 async function reportIncident() {
+  await browserAlerts.sync();
   const {state,config} = await chrome.storage.local.get(['state','config']);
   const incident = state?.incident;
   if (!mailAlertsEnabled(config) || !incident || incident.notified || !config?.mailBridgeToken) return;
@@ -824,6 +838,7 @@ async function handleCommand(message) {
     return cycle(true);
   }
   if(type==='MAIL_HEALTH') return mailHealth();
+  if(type==='BROWSER_ALERT_TEST') return browserAlerts.preview();
   if(type==='MAIL_TEST') {
     // 只有用户点击“发送测试邮件”才调用，测试通知与故障事件分开。
     const {config}=await chrome.storage.local.get('config');
@@ -864,6 +879,7 @@ async function handleCommand(message) {
       state.resumePlan=null;
       log(state,'info',queueOnly?'开始发送待发视频：不重新查询；限速自动等待，直到队列发完或手动暂停／出错。':autoLoop?'已开启全自动循环：抓取 → 发送 → 发完再抓取；限速自动等待，直到暂停或出错。':'已开启监控。');
     });
+    await browserAlerts.sync();
     if(queueOnly) {void cycle(false,{queueOnly:true});return {started:true,queueOnly:true};}
     await scheduleAlarm();
     void cycle(); return autoLoop?{started:true,autoLoop:true}:{started:true};
@@ -1003,6 +1019,7 @@ if (chrome.debugger?.onDetach?.addListener) {
   });
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+  if(message?.target==='alert-player') return false;
   if(sender.id!==chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return false;
   command(message).then(data=>respond({ok:true,data})).catch(error=>respond({ok:false,error:error.message}));
   return true;

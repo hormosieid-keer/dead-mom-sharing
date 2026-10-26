@@ -28,7 +28,8 @@ const deferred = () => {
 async function harness(t, seed = {}, fetchHandler, respond) {
   const globals = { chrome: globalThis.chrome, fetch: globalThis.fetch, setTimeout: globalThis.setTimeout };
   const store = clone({ state: defaultState(), config: config(), ...seed });
-  const calls = { fetch: [], scripts: [], alarms: [], access: [], messages: [], debugger: [], windows: [], tabs: [] };
+  const calls = { fetch: [], scripts: [], alarms: [], access: [], messages: [], debugger: [], windows: [], tabs: [], audio: [], badges: [] };
+  let offscreenReady=false;
   const listeners = {};
   let tab = { id: 7, windowId: 40, active: true, url: 'https://www.douyin.com/', status: 'complete' };
   let nextWindowId = 41;
@@ -43,12 +44,15 @@ async function harness(t, seed = {}, fetchHandler, respond) {
       async setAccessLevel(value) { calls.access.push(value); }
     } },
     runtime: { id: 'test-extension', getURL: path => `chrome-extension://test-extension/${path}`,
+      getContexts:async()=>offscreenReady?[{}]:[],
+      sendMessage:async message=>{calls.audio.push(clone(message));return {ok:true};},
       getPlatformInfo: async () => ({ os: 'win' }), openOptionsPage: async () => {},
       onMessage: { addListener: fn => { listeners.message = fn; } },
       onStartup: { addListener: fn => { listeners.startup = fn; } } },
     alarms: { get: async () => null, clear: async () => true, create: async (...args) => { calls.alarms.push(args); },
       onAlarm: { addListener: fn => { listeners.alarm = fn; } } },
-    action: { onClicked: { addListener: fn => { listeners.action = fn; } } },
+    action: { onClicked: { addListener: fn => { listeners.action = fn; } },setBadgeBackgroundColor:async()=>{},setBadgeText:async value=>calls.badges.push(value.text),setTitle:async()=>{} },
+    offscreen:{createDocument:async()=>{offscreenReady=true;}},
     windows: {
       get: async (id) => ({ id, ...windowStates.get(id), tabs: id === tab.windowId ? [clone(tab)] : [] }),
       update: async (id,options) => {
@@ -98,6 +102,7 @@ async function harness(t, seed = {}, fetchHandler, respond) {
   let source = await readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
   source = source.replace("from './core.js'", `from '${new URL('../extension/core.js', import.meta.url).href}'`)
     .replace("from './pointer.js'", `from '${new URL('../extension/pointer.js', import.meta.url).href}'`)
+    .replace("from './browser-alerts.js'", `from '${new URL('../extension/browser-alerts.js', import.meta.url).href}'`)
     .replace("import { browserTask } from './adapter.js';", 'const browserTask = () => {};');
   source += '\nexport { ready, command, cycle, reportIncident };\n';
   const worker = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${crypto.randomUUID()}`);
@@ -1096,7 +1101,7 @@ test('a rejected mail token is distinguished from a network failure', async t =>
   await assert.rejects(worker.command({ type: 'MAIL_HEALTH' }), /连接令牌不匹配/u);
 });
 
-const diagnosticBuild = '0.2.2（搜索验证识别修复）';
+const diagnosticBuild = '0.2.3（浏览器声光告警）';
 function oldDiagnostic(state = queued()) {
   state.friendReadReport = { at: 1, error: '发送前检查失败（share-prepare-v5）' };
   return state;
@@ -2186,4 +2191,22 @@ test('an older saved token preserves enabled notifications without requiring rec
   const {worker,store,calls}=await harness(t);
   assert.equal(store.config.mailAlertsEnabled,true);
   await worker.command({type:'MAIL_HEALTH'});assert.equal(calls.fetch.length,1);
+});
+
+test('real incidents sound once with email off, manual pause is silent, and resume clears the badge',async t=>{
+  const settings={...config(),mailAlertsEnabled:false};
+  const state=queued(settings);state.enabled=false;
+  const {worker,store,calls,idle}=await harness(t,{state,config:settings});
+  await worker.command({type:'PAUSE'});assert.equal(calls.audio.length,0);
+  store.state.paused=true;store.state.incident={id:'browser-only',reason:'需要本人验证',notified:false};
+  await Promise.all([worker.reportIncident(),worker.reportIncident()]);
+  assert.equal(calls.audio.length,1);assert.equal(calls.fetch.length,0);assert.equal(calls.badges.at(-1),'!');
+  await worker.command({type:'SEND_PENDING'});await idle();
+  assert.equal(store.state.incident,null);assert.equal(calls.badges.at(-1),'');assert.equal(calls.audio.length,1);
+});
+
+test('local sound preview never performs mail or Douyin operations',async t=>{
+  const {worker,store,calls}=await harness(t,{config:{...config(),mailAlertsEnabled:false}});
+  assert.deepEqual(await worker.command({type:'BROWSER_ALERT_TEST'}),{played:true});
+  assert.equal(calls.audio.length,1);assert.equal(calls.fetch.length,0);assert.equal(calls.scripts.length,0);assert.equal(store.state.incident,null);
 });

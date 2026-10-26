@@ -26,6 +26,9 @@ docs/DEVELOPMENT.md for architecture and commands, and TESTING.md for evidence l
 - Email alerts are optional. Disabled means no mail health requests or mail
   sends/retries; on-page pauses and unknown records remain in force. Retain old
   configured users' preference and honor an explicit opt-out with saved tokens.
+- Browser incident sounds are independent of email. Persist one sound claim per
+  incident; never sound on manual pause or from every options page. Keep the
+  safety pause on audio failure and clear visual badges only after recovery.
 - Reload recovery is bounded to two refreshes (three page attempts) per pending
   delivery before any sending input; challenge, account mismatch and ambiguity
   must not enter that retry branch. A possible send is never retried.

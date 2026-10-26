@@ -2,7 +2,7 @@
 // Page actions use a stub adapter: no real account, sharing or SMTP is possible.
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { defaultState, enqueue } from '../extension/core.js';
@@ -32,6 +32,7 @@ try {
   manifest.content_security_policy.extension_pages = `script-src 'self'; object-src 'self'; connect-src 'self' ${mail}`;
   await writeFile(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
   for (const name of ['core.js', 'pointer.js', 'network-tap.js']) await copyFile(path.join(root, 'extension', name), path.join(extension, name));
+  for(const asset of ['browser-alerts.js','alert-player.js','alert-player.html','audio','icons']) await cp(path.join(root,'extension',asset),path.join(extension,asset),{recursive:true});
   const source = await readFile(path.join(root, 'extension/background.js'), 'utf8');
   assert.ok(source.includes("const MAIL = 'http://127.0.0.1:17321';"));
   await writeFile(path.join(extension, 'background.js'), source.replace("const MAIL = 'http://127.0.0.1:17321';", `const MAIL = '${mail}';`));
@@ -159,7 +160,7 @@ try {
   }else{
   assert.equal(after.state.deliveries[0].status, 'sent', JSON.stringify({ incident: after.state.incident, logs: after.state.logs }));
   assert.equal(after.state.friendReadReport.phase, 'done');
-  assert.equal(after.state.friendReadReport.build, '0.2.2（搜索验证识别修复）');
+  assert.equal(after.state.friendReadReport.build, '0.2.3（浏览器声光告警）');
   assert.equal(after.state.friendReadReport.sent, 0, 'already-sent fixture performs no new send');
   assert.equal(after.state.round.source,'queue');
   assert.equal(after.state.round.status,'done');

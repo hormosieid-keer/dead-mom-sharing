@@ -17,7 +17,7 @@ async function until(predicate) {
   }
   throw new Error('Options UI did not settle');
 }
-const build = '0.2.2（搜索验证识别修复）';
+const build = '0.2.3（浏览器声光告警）';
 async function fixture({ saved, error, persistedError, workerBuild = build, clipboardError = false, manualSend = false, autoLoop = false, initialState = {},configOverrides = {} } = {}) {
   const dom = new JSDOM(html, { url: 'https://extension-fixture.test/options.html', runScripts: 'outside-only' });
   const { window } = dom;
@@ -34,6 +34,7 @@ async function fixture({ saved, error, persistedError, workerBuild = build, clip
     calls.push(type);
     if (type === 'STATUS') return { ok: true, data: structuredClone({ state, config, busy: false, workerBuild }) };
     if(type==='SAVE'){Object.assign(config,structuredClone(fields.config));return {ok:true,data:{saved:true}};}
+    if(type==='BROWSER_ALERT_TEST')return {ok:true,data:{played:true}};
     if(type==='AUTO_LOOP'&&autoLoop){state.enabled=true;state.runMode='auto-loop';return {ok:true,data:{started:true,autoLoop:true}};}
     if(type==='PAUSE'){state.enabled=false;state.resumePlan=null;return {ok:true,data:{}};}
     if (type === 'SEND_PENDING' && manualSend) {
@@ -167,7 +168,7 @@ test('UI shows persisted progress, terminal success and actual background build'
     await f.window.refresh();
     assert.equal(f.$('friend-diagnostic').dataset.state, 'ready');
     assert.match(f.$('friend-diagnostic-output').value, /状态：已结束/);
-    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.2（搜索验证识别修复）/);
+    assert.match(f.$('friend-diagnostic-output').value, /报告版本：0.2.3（浏览器声光告警）/);
   } finally { f.close(); }
 });
 
@@ -352,4 +353,41 @@ test('disabled mail hides stale mail-retry guidance while keeping the real on-pa
     assert.match(f.$('mail-error').textContent,/已关闭/);assert.doesNotMatch(f.$('mail-error').textContent,/恢复后重试/);
     assert.equal(f.$('mail-alerts-enabled').checked,false);
   }finally{f.close();}
+});
+
+test('a real incident blinks a top-right-dot favicon and clears on recovery without replaying audio in each page',async()=>{
+  const f=await fixture({configOverrides:{mailAlertsEnabled:false}});
+  try {
+    const original=f.window.setInterval;
+    let blink;
+    f.window.setInterval=(callback,ms)=>{if(ms===900)blink=callback;return original(callback,ms);};
+    f.state.paused=true;f.state.incident={id:'ui-incident',reason:'需要处理'};
+    await f.window.refresh();
+    assert.match(f.window.document.title,/待处理/u);
+    assert.ok(f.$('tab-icon').href.endsWith('icons/tab-alert.svg'));
+    blink();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
+    await f.window.refresh();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'),'polling must not restart the blink');
+    f.state.paused=false;f.state.incident=null;await f.window.refresh();
+    assert.doesNotMatch(f.window.document.title,/待处理/u);assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
+    assert.deepEqual(f.calls.filter(type=>type!=='STATUS'),[],'the UI never creates duplicate playback');
+  } finally {f.close();}
+});
+
+test('manual pause does not set a favicon warning and a blocked sound keeps visible recovery guidance',async()=>{
+  const f=await fixture({initialState:{paused:true}});
+  try {
+    assert.doesNotMatch(f.window.document.title,/待处理/u);
+    f.state.incident={id:'blocked'};f.state.browserAlert={incidentId:'blocked',status:'blocked',error:'请点击试听提示音检查声音'};
+    await f.window.refresh();assert.match(f.$('browser-alert-error').textContent,/试听/u);
+    f.state.incident=null;await f.window.refresh();assert.equal(f.$('browser-alert-error').textContent,'');
+  } finally {f.close();}
+});
+
+test('the explicit sound preview sends only a local preview request',async()=>{
+  const f=await fixture();
+  try {
+    f.$('preview-alert').click();await until(()=>f.$('toast').textContent.includes('未发送视频或邮件'));
+    assert.deepEqual(f.calls.filter(type=>type!=='STATUS'),['BROWSER_ALERT_TEST']);
+    assert.equal(f.state.incident,null);
+  } finally {f.close();}
 });

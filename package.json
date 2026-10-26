@@ -1,6 +1,6 @@
 {
   "name": "dead-mom-sharing",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "抖音司凤视频一键转发功能：按话题与文案关键词查找视频，将原生卡片转发给选定好友",

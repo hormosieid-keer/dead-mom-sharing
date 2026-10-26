@@ -9,7 +9,7 @@ import { defaultState, makeKey, beginRound, finishRound } from '../extension/cor
 const root = path.resolve(import.meta.dirname, '..');
 const out = path.join(root, 'docs/images');
 await mkdir(out, { recursive: true });
-const files = Object.fromEntries(await Promise.all(['options.html', 'options.css', 'options.js'].map(async name => [name, await readFile(path.join(root, 'extension', name), 'utf8')])));
+const files = Object.fromEntries(await Promise.all(['options.html', 'options.css', 'options.js', 'icons/tab.svg', 'icons/tab-alert.svg'].map(async name => [name, await readFile(path.join(root, 'extension', name), 'utf8')])));
 const manifest = JSON.parse(await readFile(path.join(root, 'extension/manifest.json'), 'utf8'));
 const at = Date.UTC(2026, 9, 24, 7, 0);
 const recipients = ['甲', '乙', '丙'].map((suffix, index) => ({
@@ -39,7 +39,7 @@ try {
     const url = new URL(route.request().url());
     const name = url.pathname.slice(1);
     if (url.origin === 'https://documentation.invalid' && files[name]) return route.fulfill({
-      contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8', body: files[name]
+      contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html; charset=utf-8', body: files[name]
     });
     await route.abort();
   });
@@ -65,6 +65,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#mail-status').textContent.includes('已配置'));
   await page.locator('#toast').waitFor({ state: 'hidden', timeout: 12000 });
   await page.screenshot({ path: path.join(out, 'dashboard.png'), fullPage: true });
+  await page.locator('.browser-alert-bar').screenshot({path:path.join(out,'browser-alert.png')});
   await page.locator('.primary > .card').nth(0).screenshot({ path: path.join(out, 'bind-account.png') });
   await page.locator('.primary > .card').nth(1).screenshot({ path: path.join(out, 'read-friends.png') });
   await page.locator('.primary > .card').nth(2).screenshot({ path: path.join(out, 'rule-editor.png') });
@@ -109,7 +110,7 @@ try {
   // scrolling a long explanation, dynamic rule help and keyboard dismissal.
   const callsBefore=await page.evaluate(()=>docsCalls.length);
   const helpButtons=page.locator('.region-help-button');
-  assert.equal(await helpButtons.count(),12,'11 regions plus the sample rule');
+  assert.equal(await helpButtons.count(),13,'12 regions plus the sample rule');
   const tooltip=page.locator('#region-help-tooltip');
   for(const viewport of [{width:1440,height:1100},{width:390,height:844}]){
     await page.setViewportSize(viewport);
@@ -154,5 +155,5 @@ try {
   assert.equal(await page.locator('#mail-test').isEnabled(),false);
   await page.locator('[data-help="mail"]').screenshot({path:path.join(out,'optional-mail.png')});
   assert.deepEqual(await page.evaluate(from=>docsCalls.slice(from).filter(type=>type!=='STATUS'),callsBefore),[]);
-  console.log('Rendered 10 screenshots. Help hover/keyboard/scroll, optional-mail disabled controls, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
+  console.log('Rendered 11 screenshots. Browser-alert controls, help hover/keyboard/scroll, optional-mail disabled controls, desktop/390px bounds and zero worker actions checked. Synthetic data only.');
 } finally { await browser.close(); }

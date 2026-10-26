@@ -1,9 +1,24 @@
 const $ = id=>document.getElementById(id);
-const UI_BUILD='0.2.2（搜索验证识别修复）';
+const UI_BUILD='0.2.3（浏览器声光告警）';
 const mailEnabled=cfg=>typeof cfg?.mailAlertsEnabled==='boolean'?cfg.mailAlertsEnabled:!!cfg?.mailBridgeToken?.trim();
 let config, snapshot, friends=[],dirty=false,noticeTimer;
 let statusRequest=0,statusApplied=0,statusRevision=-1,statusRefreshTimer;
 let friendDiagnosticBusy=false,friendReportAt=0,friendReportSeq=0,friendLocalReport=false;
+const normalTitle=document.title;
+let alertBlink, alertVisible=false;
+function updateBrowserNotice(state) {
+  const active=!!(state.paused&&(state.incident?.id||state.incident?.incidentId));
+  const icon=$('tab-icon');
+  if(active&&!alertBlink) {
+    const paint=()=>{alertVisible=!alertVisible;icon.href=alertVisible?'icons/tab-alert.svg':'icons/tab.svg';};
+    paint();alertBlink=setInterval(paint,900);
+    document.title='【待处理】'+normalTitle;
+  } else if(!active) {
+    clearInterval(alertBlink);alertBlink=null;alertVisible=false;
+    icon.href='icons/tab.svg';document.title=normalTitle;
+  }
+  $('browser-alert-error').textContent=active&&state.browserAlert?.incidentId===(state.incident?.id||state.incident?.incidentId)?state.browserAlert.error||'':'';
+}
 async function api(type,fields={}) {
   const result=await chrome.runtime.sendMessage({type,...fields});
   if(!result?.ok) throw new Error(result?.error||'插件后台未响应，请重新加载扩展。');
@@ -16,6 +31,10 @@ function notice(message,error=false) {
 function el(tag,text,className) {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
 // Local, static help only: opening it must never call the worker or save a draft.
 const REGION_HELP={
+  browserAlert:{title:'浏览器声音与红点提醒',intro:'真正异常暂停时播放一次叮咚，设置页标签图标闪烁红点并标记待处理；关闭设置页仍能发出声音，工具栏保留告警标记。',items:[
+    ['试听提示音','只播放选定的本地叮咚声音，不发视频、不发邮件、不修改运行状态。'],
+    ['提醒何时结束','同一告警不因刷新或邮件重试反复响；手动暂停不触发新提醒，处理问题并成功恢复后红点和工具栏标记清除。'],
+    ['邮件与静音','和邮件开关独立，不改变抖音工作标签的静音。浏览器或系统禁止声音时看页面提示；标签页休眠可能延迟闪烁。']]},
   rhythm:{title:'运行参数',intro:'控制多久检查、找多新的视频，以及发送速度。三个选项改完后，都要点击“保存规则与设置”。',items:[
     ['检查间隔','周期监控的检查周期，也用于全自动循环没有新待发视频时的等待时间。可选 30 秒到 1 小时。'],
     ['新视频窗口','按视频发布时间筛选，例如 1 小时表示只接收最近 1 小时发布的视频。可选 5 分钟到 30 天，不是程序运行时长。'],
@@ -203,7 +222,7 @@ function showFriendReport(report,{local=false}={}) {
   $('friend-diagnostic').dataset.state=report.phase==='running'?'loading':report.error||partial?'error':'ready';
   for(const [id,value] of [['friend-first-observed',first?.controls],['friend-first-recognized',first?.recognized],['friend-first-rejected',first?.rejected]]) $(id).textContent=value??'—';
   const kinds={friends:'好友读取',diagnose:'分享面板诊断',run:'查询／发送',scan:'试检索'};
-  const lines=['好友读取诊断 · v0.2.2',`时间：${time(report.at)}`,
+  const lines=['好友读取诊断 · v0.2.3',`时间：${time(report.at)}`,
     '报告版本：'+(report.build||'历史记录（未记录版本）'),'当前后台：'+(snapshot?.workerBuild||'未确认，请重新加载扩展'),
     '类型：'+(kinds[report.kind]||'历史报告')+'；状态：'+(report.phase==='running'?'进行中':report.error?'失败':'已结束')];
   if(report.error) {
@@ -261,6 +280,7 @@ function updateMailControls(data){
 }
 function drawStatus(data) {
   snapshot=data;const state=data.state;
+  updateBrowserNotice(state);
   $('runtime-version').textContent=data.workerBuild===UI_BUILD?'后台 '+data.workerBuild:'后台 '+(data.workerBuild||'版本未知')+'，请重新加载扩展';
   const running=state.enabled&&!state.paused;
   const queueOnly=state.runMode==='queue-only',autoLoop=state.runMode==='auto-loop';
@@ -370,6 +390,7 @@ click('start',async()=>{if(dirty)await save();await api('START');notice('已开�
 click('send-pending',async()=>{if(dirty)await save();await api('SEND_PENDING');notice('正在发送待发视频；限速自动等待，全部发完后停止，不重新查询。');await refresh();});
 click('auto-loop',async()=>{if(dirty)await save();await api('AUTO_LOOP');notice('已开启全自动循环：抓取、发送、发完再抓取；限速自动等待。');await refresh();});
 click('pause',async()=>{await api('PAUSE');notice('已暂停；正在发送的单次操作会先完成。');await refresh();});
+click('preview-alert',async()=>{await api('BROWSER_ALERT_TEST');notice('已播放叮咚提示音；未发送视频或邮件。');});
 click('scan',async()=>{if(dirty)await save();notice('正在试检索，不会发送消息。');const result=await api('SCAN');await refresh();const minutes=Number(config.videoWindowMinutes)||60;notice(result.cancelled?`试检索已暂停，本轮已找到 ${result.count} 个视频。`:result.partial?`本段试检索完成：查询 ${result.queriesDone}/${result.queriesTotal}，命中 ${result.count} 个视频。再次点击试检索继续，不会发送。`:`试检索完成：命中 ${result.count} 个视频（窗口 ${minutes} 分钟）。详细数量见“运行记录”。`);});
 click('mail-health',async()=>{if(dirty)await save();await api('MAIL_HEALTH');$('mail-status').textContent='邮件服务已配置。请另行发送测试邮件验证投递。';notice('邮件服务已连接。');});
 click('mail-test',async()=>{if(dirty)await save();await api('MAIL_TEST');notice('测试邮件已交给邮件服务器，请检查收件箱。');});

@@ -2,7 +2,7 @@
 // action is a synthetic adapter; no Douyin account, messages or SMTP are used.
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { defaultState } from '../extension/core.js';
@@ -30,6 +30,7 @@ try {
   await writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
   for(const name of ['core.js','pointer.js','network-tap.js','options.html','options.css','options.js'])
     await copyFile(path.join(root,'extension',name),path.join(extension,name));
+  for(const asset of ['browser-alerts.js','alert-player.js','alert-player.html','audio','icons']) await cp(path.join(root,'extension',asset),path.join(extension,asset),{recursive:true});
   const source=await readFile(path.join(root,'extension/background.js'),'utf8');
   await writeFile(path.join(extension,'background.js'),source.replace("const MAIL = 'http://127.0.0.1:17321';",`const MAIL = '${mail}';`));
   await writeFile(path.join(extension,'adapter.js'),`export async function browserTask(input){

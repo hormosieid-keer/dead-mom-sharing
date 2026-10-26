@@ -1,5 +1,9 @@
 # 开源来源与许可证
 
+## 项目原创声音和图标
+
+浏览器告警音 `extension/audio/alert-ding-dong.wav` 为数学振荡器合成的原创声音，未使用第三方录音、其他软件的通知音或他人旋律；详见 [音频说明](extension/audio/CREDITS.md)。标签图标由项目代码绘制。二者随项目按 MIT 许可证分发，先前试听但未选用的外部素材不进入发行包。
+
 ## dy-cli
 
 - 项目：https://github.com/Youhai020616/douyin
