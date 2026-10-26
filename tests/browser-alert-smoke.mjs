@@ -55,7 +55,7 @@ try {
   }));
   await incident('fixture-open-pages');
   await until(async()=>{const state=await status();return state.browserAlert?.status==='played'&&state.badge==='!';});
-  const warningTitle='告警：（虚构验证告警，仅测试浏览器提示）';
+  const warningTitle='告警：虚构验证告警，仅测试浏览器提示';
   await until(async()=>await options.title().then(title=>title===warningTitle)&&await second.title().then(title=>title===warningTitle));
   const href=await options.locator('#tab-icon').getAttribute('href');
   await options.waitForFunction(href=>document.querySelector('#tab-icon').getAttribute('href')!==href,href);

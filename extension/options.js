@@ -11,7 +11,7 @@ function updateBrowserNotice(state) {
   const icon=$('tab-icon');
   if(active) {
     const reason=String(state.incident.reason||'').replace(/\s+/gu,' ').trim()||'需要人工处理';
-    document.title='告警：（'+reason+'）';
+    document.title='告警：'+reason;
   }
   if(active&&!alertBlink) {
     const paint=()=>{alertVisible=!alertVisible;icon.href=alertVisible?'icons/tab-alert.svg':'icons/tab.svg';};
@@ -34,7 +34,7 @@ function notice(message,error=false) {
 function el(tag,text,className) {const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
 // Local, static help only: opening it must never call the worker or save a draft.
 const REGION_HELP={
-  browserAlert:{title:'浏览器声音与红点提醒',intro:'真正异常暂停时播放一次叮咚，设置页标签图标闪烁红点，标题显示“告警：（具体原因）”；关闭设置页仍能发出声音，工具栏保留告警标记。',items:[
+  browserAlert:{title:'浏览器声音与红点提醒',intro:'真正异常暂停时播放一次叮咚，设置页标签图标闪烁红点，标题显示“告警：具体原因”；关闭设置页仍能发出声音，工具栏保留告警标记。',items:[
     ['试听提示音','只播放选定的本地叮咚声音，不发视频、不发邮件、不修改运行状态。'],
     ['提醒何时结束','同一告警不因刷新或邮件重试反复响；手动暂停不触发新提醒，处理问题并成功恢复后红点和工具栏标记清除。'],
     ['邮件与静音','和邮件开关独立，不改变抖音工作标签的静音。浏览器或系统禁止声音时看页面提示；标签页休眠可能延迟闪烁。']]},

@@ -363,12 +363,12 @@ test('a real incident blinks a top-right-dot favicon and clears on recovery with
     f.window.setInterval=(callback,ms)=>{if(ms===900)blink=callback;return original(callback,ms);};
     f.state.paused=true;f.state.incident={id:'ui-incident',reason:'需要处理'};
     await f.window.refresh();
-    assert.equal(f.window.document.title,'告警：（需要处理）');
+    assert.equal(f.window.document.title,'告警：需要处理');
     assert.ok(f.$('tab-icon').href.endsWith('icons/tab-alert.svg'));
     blink();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
     await f.window.refresh();assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'),'polling must not restart the blink');
     f.state.incident.reason='抖音要求安全验证';await f.window.refresh();
-    assert.equal(f.window.document.title,'告警：（抖音要求安全验证）','the current reason must update while the existing blink stays active');
+    assert.equal(f.window.document.title,'告警：抖音要求安全验证','the current reason must update while the existing blink stays active');
     f.state.paused=false;f.state.incident=null;await f.window.refresh();
     assert.equal(f.window.document.title,'司凤转发（dead-mom sharing)');assert.ok(f.$('tab-icon').href.endsWith('icons/tab.svg'));
     assert.deepEqual(f.calls.filter(type=>type!=='STATUS'),[],'the UI never creates duplicate playback');
